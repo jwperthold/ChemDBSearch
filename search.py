@@ -97,6 +97,16 @@ def cli():
     help='Separate SDF/PDB file to use as the substructure filter (instead of the query molecule)'
 )
 @click.option(
+    '--png',
+    is_flag=True,
+    help='Write 2D depiction PNGs into a subfolder'
+)
+@click.option(
+    '--svg',
+    is_flag=True,
+    help='Write 2D depiction SVGs into a subfolder'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -113,6 +123,8 @@ def search(
     atom_substructure_match: bool,
     exact_substructure_match: bool,
     substructure_file: Optional[Path],
+    png: bool,
+    svg: bool,
     verbose: bool
 ):
     """
@@ -312,6 +324,16 @@ def search(
         MoleculeWriter.write_json(json_output, json_path)
         click.echo(f"JSON output: {json_path}")
 
+    if png:
+        png_dir = output_dir / f"{base_name}_png"
+        MoleculeWriter.write_png(all_results, png_dir)
+        click.echo(f"PNG output: {png_dir}")
+
+    if svg:
+        svg_dir = output_dir / f"{base_name}_svg"
+        MoleculeWriter.write_svg(all_results, svg_dir)
+        click.echo(f"SVG output: {svg_dir}")
+
     click.echo(f"\nSearch completed successfully!")
 
 
@@ -346,6 +368,16 @@ def search(
     help='Output format(s)'
 )
 @click.option(
+    '--png',
+    is_flag=True,
+    help='Write 2D depiction PNGs into a subfolder'
+)
+@click.option(
+    '--svg',
+    is_flag=True,
+    help='Write 2D depiction SVGs into a subfolder'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -358,6 +390,8 @@ def filter(
     exact_substructure_match: bool,
     output_dir: Path,
     output_format: str,
+    png: bool,
+    svg: bool,
     verbose: bool
 ):
     """
@@ -458,6 +492,16 @@ def filter(
         MoleculeWriter.write_json(json_output, json_path)
         click.echo(f"JSON output: {json_path}")
 
+    if png:
+        png_dir = output_dir / f"{base_name}_png"
+        MoleculeWriter.write_png(passed, png_dir)
+        click.echo(f"PNG output: {png_dir}")
+
+    if svg:
+        svg_dir = output_dir / f"{base_name}_svg"
+        MoleculeWriter.write_svg(passed, svg_dir)
+        click.echo(f"SVG output: {svg_dir}")
+
     click.echo(f"\nFiltering completed successfully!")
 
 
@@ -468,12 +512,6 @@ def filter(
     type=int,
     default=100,
     help='Number of clusters (default: 100)'
-)
-@click.option(
-    '--fingerprint-type',
-    type=click.Choice(['morgan', 'rdkit', 'maccs', 'atompair']),
-    default='morgan',
-    help='Fingerprint type for similarity calculation'
 )
 @click.option(
     '--output-dir', '-o',
@@ -488,6 +526,16 @@ def filter(
     help='Output format(s)'
 )
 @click.option(
+    '--png',
+    is_flag=True,
+    help='Write 2D depiction PNGs into a subfolder'
+)
+@click.option(
+    '--svg',
+    is_flag=True,
+    help='Write 2D depiction SVGs into a subfolder'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -495,19 +543,21 @@ def filter(
 def cluster(
     input_file: Path,
     n_clusters: int,
-    fingerprint_type: str,
     output_dir: Path,
     output_format: str,
+    png: bool,
+    svg: bool,
     verbose: bool
 ):
     """
-    Cluster molecules by fingerprint similarity and output medoids.
+    Cluster molecules by ECFP4 Tanimoto similarity and output medoids.
 
     INPUT_FILE: SDF file containing molecules to cluster.
 
-    Computes pairwise Tanimoto similarity, clusters into N groups using
-    agglomerative clustering, and outputs the medoid (most central member)
-    of each cluster.
+    Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric
+    used by the search command — to compute pairwise Tanimoto distances,
+    clusters into N groups using agglomerative clustering, and outputs the
+    medoid (most central member) of each cluster.
 
     Example:
         python search.py cluster results.sdf -n 50
@@ -545,13 +595,13 @@ def cluster(
 
     click.echo(f"Molecules: {n_mols}")
     click.echo(f"Target clusters: {n_clusters}")
-    click.echo(f"Fingerprint: {fingerprint_type}")
+    click.echo(f"Fingerprint: ECFP4 (Morgan radius=2, 2048 bits)")
 
-    # Generate fingerprints
+    # Generate ECFP4 fingerprints (same as SmallWorld search)
     click.echo("\nGenerating fingerprints...")
     fps = []
     for mol, smiles in molecules:
-        fp = FingerprintEngine.generate_fingerprint(mol, fingerprint_type)
+        fp = FingerprintEngine.generate_fingerprint(mol, 'morgan', radius=2, n_bits=2048)
         fps.append(fp)
 
     # Compute pairwise distance matrix (1 - Tanimoto)
@@ -619,11 +669,21 @@ def cluster(
             'timestamp': timestamp,
             'n_clusters': n_clusters,
             'n_molecules': n_mols,
-            'fingerprint_type': fingerprint_type,
+            'fingerprint_type': 'ECFP4 (Morgan radius=2, 2048 bits)',
             'medoids': medoids
         }
         MoleculeWriter.write_json(json_output, json_path)
         click.echo(f"JSON output: {json_path}")
+
+    if png:
+        png_dir = output_dir / f"{base_name}_png"
+        MoleculeWriter.write_png(medoids, png_dir)
+        click.echo(f"PNG output: {png_dir}")
+
+    if svg:
+        svg_dir = output_dir / f"{base_name}_svg"
+        MoleculeWriter.write_svg(medoids, svg_dir)
+        click.echo(f"SVG output: {svg_dir}")
 
     click.echo(f"\nClustering completed successfully!")
 

@@ -13,6 +13,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
 - **Clustering**: Group molecules by pairwise Tanimoto similarity and extract representative medoids
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
+- **2D depictions**: Optional PNG and SVG images of each result molecule (`--png`, `--svg`)
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
 - **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
 
@@ -22,7 +23,7 @@ Requires [conda](https://docs.conda.io/) with Python 3.10+.
 
 ```bash
 cd ChemDBSearch/
-conda install -c conda-forge rdkit requests click pandas python-dotenv tqdm pydantic pydantic-settings numpy scikit-learn pytest
+conda install -c conda-forge rdkit requests click pandas python-dotenv tqdm pydantic pydantic-settings numpy scikit-learn cairosvg pytest
 ```
 
 ## Quick Start
@@ -69,6 +70,8 @@ python search.py search INPUT_FILE [OPTIONS]
 | `--atom-substructure-match` | `-asub` | | Filter by atom-type substructure (matches atom types, ignores bond orders) |
 | `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
 | `--substructure-file` | `-sf` | | Separate SDF/PDB file to use as substructure filter (with `-sub`, `-asub`, or `-esub`) |
+| `--png` | | | Write 2D depiction PNGs into a subfolder |
+| `--svg` | | | Write 2D depiction SVGs into a subfolder |
 | `--verbose` | `-v` | | Enable debug logging |
 
 **Example output:**
@@ -112,6 +115,8 @@ python search.py filter RESULTS_FILE SUBSTRUCTURE_FILE [OPTIONS]
 | `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
+| `--png` | | | Write 2D depiction PNGs into a subfolder |
+| `--svg` | | | Write 2D depiction SVGs into a subfolder |
 | `--verbose` | `-v` | | Enable debug logging |
 
 ```bash
@@ -136,23 +141,21 @@ python search.py cluster INPUT_FILE [OPTIONS]
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--n-clusters` | `-n` | `100` | Number of clusters |
-| `--fingerprint-type` | | `morgan` | Fingerprint type: `morgan`, `rdkit`, `maccs`, or `atompair` |
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
+| `--png` | | | Write 2D depiction PNGs into a subfolder |
+| `--svg` | | | Write 2D depiction SVGs into a subfolder |
 | `--verbose` | `-v` | | Enable debug logging |
 
 ```bash
 # Cluster search results into 50 groups, output medoids
 python search.py cluster results/search_results.sdf -n 50
 
-# Cluster with RDKit fingerprints
-python search.py cluster results/search_results.sdf -n 20 --fingerprint-type rdkit
-
 # Custom output directory
 python search.py cluster results/search_results.sdf -n 100 -o ./clustered
 ```
 
-Duplicates are removed by SMILES before clustering. The output contains one molecule per cluster (the medoid — the member with the smallest average distance to all other cluster members), sorted by cluster size descending.
+Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric as the search command. Duplicates are removed by SMILES before clustering. The output contains one molecule per cluster (the medoid — the member with the smallest average distance to all other cluster members), sorted by molecular weight ascending.
 
 ### `list-databases`
 

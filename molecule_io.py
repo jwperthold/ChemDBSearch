@@ -1,5 +1,7 @@
 from rdkit import Chem
 from rdkit.Chem import AllChem
+from rdkit.Chem.Draw import rdMolDraw2D
+import cairosvg
 from pathlib import Path
 from typing import Optional, List, Tuple
 import logging
@@ -175,6 +177,80 @@ class MoleculeWriter:
 
         writer.close()
         logger.info(f"Wrote {written_count} molecules to {output_path}")
+
+    @staticmethod
+    def write_png(molecules: List[dict], output_dir: Path, size: int = 300):
+        """
+        Write 2D depiction PNGs for each molecule.
+
+        Args:
+            molecules: List of dicts with 'smiles' and metadata
+            output_dir: Directory to write PNG files into
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        written_count = 0
+
+        for i, mol_data in enumerate(molecules):
+            smiles = mol_data.get('smiles')
+            if not smiles:
+                continue
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                logger.warning(f"Invalid SMILES at index {i}: {smiles}")
+                continue
+
+            AllChem.Compute2DCoords(mol)
+            name = mol_data.get('id') or mol_data.get('name') or f"mol_{i}"
+            # Sanitize filename
+            safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(name))
+            png_path = output_dir / f"{safe_name}.png"
+
+            drawer = rdMolDraw2D.MolDraw2DSVG(size, size)
+            drawer.DrawMolecule(mol)
+            drawer.FinishDrawing()
+            svg = drawer.GetDrawingText()
+            cairosvg.svg2png(bytestring=svg.encode(), write_to=str(png_path),
+                             output_width=size, output_height=size)
+            written_count += 1
+
+        logger.info(f"Wrote {written_count} PNG images to {output_dir}")
+
+    @staticmethod
+    def write_svg(molecules: List[dict], output_dir: Path, size: int = 300):
+        """
+        Write 2D depiction SVGs for each molecule.
+
+        Args:
+            molecules: List of dicts with 'smiles' and metadata
+            output_dir: Directory to write SVG files into
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        written_count = 0
+
+        for i, mol_data in enumerate(molecules):
+            smiles = mol_data.get('smiles')
+            if not smiles:
+                continue
+
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                logger.warning(f"Invalid SMILES at index {i}: {smiles}")
+                continue
+
+            AllChem.Compute2DCoords(mol)
+            name = mol_data.get('id') or mol_data.get('name') or f"mol_{i}"
+            safe_name = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(name))
+            svg_path = output_dir / f"{safe_name}.svg"
+
+            drawer = rdMolDraw2D.MolDraw2DSVG(size, size)
+            drawer.DrawMolecule(mol)
+            drawer.FinishDrawing()
+            svg = drawer.GetDrawingText()
+            svg_path.write_text(svg)
+            written_count += 1
+
+        logger.info(f"Wrote {written_count} SVG images to {output_dir}")
 
     @staticmethod
     def write_json(results: dict, output_path: Path):
