@@ -217,4 +217,6 @@ Run `python search.py list-databases` for the current list. Common databases inc
 
 ## License
 
-For research use. SmallWorld API is provided by [UCSF DOCK](https://dock.compbio.ucsf.edu/). Enamine REAL compounds are available for purchase from [Enamine](https://enamine.net/).
+MIT License. See [LICENSE](LICENSE) for details.
+
+SmallWorld API is provided by [UCSF DOCK](https://dock.compbio.ucsf.edu/). Enamine REAL compounds are available for purchase from [Enamine](https://enamine.net/).
