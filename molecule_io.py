@@ -139,6 +139,10 @@ class MoleculeWriter:
                 logger.warning(f"Invalid SMILES at index {i}: {smiles}")
                 continue
 
+            # Set molecule name (first line in SDF block)
+            name = mol_data.get('id') or mol_data.get('name') or smiles
+            mol.SetProp("_Name", str(name))
+
             # Add explicit hydrogens
             mol = Chem.AddHs(mol)
 

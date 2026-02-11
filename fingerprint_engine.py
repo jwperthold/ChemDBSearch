@@ -1,5 +1,6 @@
 from rdkit import Chem
 from rdkit.Chem import AllChem, DataStructs, AdjustQueryParameters, AdjustQueryProperties
+from rdkit.Chem import rdFingerprintGenerator
 from typing import List, Tuple, Optional
 import logging
 
@@ -43,13 +44,16 @@ class FingerprintEngine:
             Fingerprint object
         """
         if fp_type == 'morgan':
-            return AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
+            gen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
+            return gen.GetFingerprint(mol)
         elif fp_type == 'rdkit':
-            return Chem.RDKFingerprint(mol, fpSize=n_bits)
+            gen = rdFingerprintGenerator.GetRDKitFPGenerator(fpSize=n_bits)
+            return gen.GetFingerprint(mol)
         elif fp_type == 'maccs':
             return AllChem.GetMACCSKeysFingerprint(mol)
         elif fp_type == 'atompair':
-            return AllChem.GetAtomPairFingerprint(mol)
+            gen = rdFingerprintGenerator.GetAtomPairGenerator(fpSize=n_bits)
+            return gen.GetFingerprint(mol)
         else:
             raise ValueError(f"Unknown fingerprint type: {fp_type}. Valid types: {list(FingerprintEngine.FINGERPRINT_TYPES.keys())}")
 

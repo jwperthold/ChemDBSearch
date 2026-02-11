@@ -11,6 +11,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
 - **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
+- **Clustering**: Group molecules by pairwise Tanimoto similarity and extract representative medoids
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
 - **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
@@ -21,7 +22,7 @@ Requires [conda](https://docs.conda.io/) with Python 3.10+.
 
 ```bash
 cd ChemDBSearch/
-conda install -c conda-forge rdkit requests click pandas python-dotenv tqdm pydantic pydantic-settings pytest
+conda install -c conda-forge rdkit requests click pandas python-dotenv tqdm pydantic pydantic-settings numpy scikit-learn pytest
 ```
 
 ## Quick Start
@@ -123,6 +124,35 @@ python search.py filter results/search_results.sdf query.sdf -asub
 # Filter with exact substructure
 python search.py filter results/search_results.sdf query.sdf -esub -o ./filtered
 ```
+
+### `cluster`
+
+Cluster molecules by fingerprint similarity and output one representative (medoid) per cluster.
+
+```
+python search.py cluster INPUT_FILE [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--n-clusters` | `-n` | `100` | Number of clusters |
+| `--fingerprint-type` | | `morgan` | Fingerprint type: `morgan`, `rdkit`, `maccs`, or `atompair` |
+| `--output-dir` | `-o` | `./results` | Output directory |
+| `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
+| `--verbose` | `-v` | | Enable debug logging |
+
+```bash
+# Cluster search results into 50 groups, output medoids
+python search.py cluster results/search_results.sdf -n 50
+
+# Cluster with RDKit fingerprints
+python search.py cluster results/search_results.sdf -n 20 --fingerprint-type rdkit
+
+# Custom output directory
+python search.py cluster results/search_results.sdf -n 100 -o ./clustered
+```
+
+Duplicates are removed by SMILES before clustering. The output contains one molecule per cluster (the medoid — the member with the smallest average distance to all other cluster members), sorted by cluster size descending.
 
 ### `list-databases`
 
