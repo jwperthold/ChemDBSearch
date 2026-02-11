@@ -9,7 +9,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Input formats**: `.sdf` and `.pdb` files with 3D coordinates
 - **Batch processing**: Multi-molecule SDF files — each molecule is searched independently
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
-- **Substructure filtering**: Generic (`-sub`) or exact (`-esub`), optionally from a separate file (`-sf`)
+- **Optional substructure filtering**: Generic (`-sub`) or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
 - **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
@@ -231,5 +231,6 @@ Run `python search.py list-databases` for the current list. Common databases inc
 MIT License. See [LICENSE](LICENSE) for details.
 
 SmallWorld API is provided by [UCSF DOCK](https://dock.compbio.ucsf.edu/). Enamine REAL compounds are available for purchase from [Enamine](https://enamine.net/).
+
 
 
