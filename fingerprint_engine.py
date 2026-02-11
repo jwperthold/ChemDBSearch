@@ -140,3 +140,25 @@ class FingerprintEngine:
         target_mol = Chem.AddHs(target_mol)
         generic_query = FingerprintEngine.make_generic_query(query_mol)
         return target_mol.HasSubstructMatch(generic_query)
+
+    @staticmethod
+    def has_exact_substructure_match(
+        query_mol: Chem.Mol,
+        target_smiles: str
+    ) -> bool:
+        """
+        Check if target contains the query as a substructure,
+        preserving atom types and bond orders.
+
+        Args:
+            query_mol: Query molecule
+            target_smiles: SMILES of the target molecule
+
+        Returns:
+            True if the target contains the query as an exact substructure
+        """
+        target_mol = Chem.MolFromSmiles(target_smiles)
+        if target_mol is None:
+            return False
+        query = Chem.RemoveHs(query_mol)
+        return target_mol.HasSubstructMatch(query)

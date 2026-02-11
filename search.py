@@ -76,6 +76,11 @@ def cli():
     help='Only return results whose heavy-atom bond graph contains the query as a substructure (ignores atom types and bond orders)'
 )
 @click.option(
+    '--exact-substructure-match', '-esub',
+    is_flag=True,
+    help='Only return results that contain the query as an exact substructure (preserves atom types and bond orders)'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -89,6 +94,7 @@ def search(
     output_format: str,
     fingerprint_type: str,
     substructure_match: bool,
+    exact_substructure_match: bool,
     verbose: bool
 ):
     """
@@ -146,14 +152,21 @@ def search(
         click.echo("Try lowering the threshold or checking your molecule structure.")
         sys.exit(0)
 
-    # 3b. Filter by generic substructure match if requested
-    if substructure_match:
+    # 3b. Filter by substructure match if requested
+    if exact_substructure_match:
+        pre_filter_count = len(results)
+        results = [
+            r for r in results
+            if FingerprintEngine.has_exact_substructure_match(mol, r['smiles'])
+        ]
+        click.echo(f"\nExact substructure filter: {len(results)}/{pre_filter_count} results contain query substructure")
+    elif substructure_match:
         pre_filter_count = len(results)
         results = [
             r for r in results
             if FingerprintEngine.has_generic_substructure_match(mol, r['smiles'])
         ]
-        click.echo(f"\nSubstructure filter: {len(results)}/{pre_filter_count} results match query bond graph")
+        click.echo(f"\nGeneric substructure filter: {len(results)}/{pre_filter_count} results match query bond graph")
 
     if not results:
         click.echo("\nNo results after substructure filtering.")

@@ -55,7 +55,8 @@ python search.py search INPUT_FILE [OPTIONS]
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
 | `--fingerprint-type` | | `morgan` | Fingerprint type (info only) |
-| `--substructure-match` | `-sub` | | Only keep results containing the query's bond graph as a substructure |
+| `--substructure-match` | `-sub` | | Filter by generic substructure (ignores atom types and bond orders) |
+| `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
 | `--verbose` | `-v` | | Enable debug logging |
 
 **Example output:**
