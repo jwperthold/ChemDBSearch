@@ -143,10 +143,12 @@ class MoleculeWriter:
             mol = Chem.AddHs(mol)
 
             # Generate 3D coordinates
-            embed_result = AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
+            params = AllChem.ETKDGv3()
+            embed_result = AllChem.EmbedMolecule(mol, params)
             if embed_result == -1:
                 logger.warning(f"3D embedding failed for index {i}, trying random coords")
-                AllChem.EmbedMolecule(mol, AllChem.ETKDGv3(), useRandomCoords=True)
+                params.useRandomCoords = True
+                AllChem.EmbedMolecule(mol, params)
 
             # Optimize geometry with MMFF94
             try:

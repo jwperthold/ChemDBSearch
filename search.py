@@ -312,6 +312,152 @@ def search(
     click.echo(f"\nSearch completed successfully!")
 
 
+@cli.command()
+@click.argument('results_file', type=click.Path(exists=True, path_type=Path))
+@click.argument('substructure_file', type=click.Path(exists=True, path_type=Path))
+@click.option(
+    '--substructure-match', '-sub',
+    is_flag=True,
+    help='Filter by generic substructure (ignores atom types and bond orders)'
+)
+@click.option(
+    '--atom-substructure-match', '-asub',
+    is_flag=True,
+    help='Filter by atom-type substructure (matches atom types, ignores bond orders)'
+)
+@click.option(
+    '--exact-substructure-match', '-esub',
+    is_flag=True,
+    help='Filter by exact substructure (preserves atom types and bond orders)'
+)
+@click.option(
+    '--output-dir', '-o',
+    type=click.Path(path_type=Path),
+    default=settings.output_dir,
+    help='Output directory for results'
+)
+@click.option(
+    '--output-format',
+    type=click.Choice(['sdf', 'json', 'both']),
+    default='both',
+    help='Output format(s)'
+)
+@click.option(
+    '--verbose', '-v',
+    is_flag=True,
+    help='Verbose output'
+)
+def filter(
+    results_file: Path,
+    substructure_file: Path,
+    substructure_match: bool,
+    atom_substructure_match: bool,
+    exact_substructure_match: bool,
+    output_dir: Path,
+    output_format: str,
+    verbose: bool
+):
+    """
+    Filter an existing SDF file by substructure match.
+
+    RESULTS_FILE: SDF file containing molecules to filter.
+    SUBSTRUCTURE_FILE: SDF/PDB file with the substructure query molecule.
+
+    Requires one of -sub, -asub, or -esub.
+
+    Example:
+        python search.py filter results.sdf fragment.sdf -sub
+        python search.py filter results.sdf query.sdf -asub
+        python search.py filter results.sdf query.sdf -esub -o ./filtered
+    """
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    if not (substructure_match or atom_substructure_match or exact_substructure_match):
+        click.echo("Error: Specify a filter mode: -sub, -asub, or -esub", err=True)
+        sys.exit(1)
+
+    click.echo(f"ChemDB Search - Substructure Filter")
+    click.echo(f"{'='*60}")
+
+    # Load substructure query molecule
+    try:
+        sub_mol, sub_smiles = MoleculeReader.read_molecule(substructure_file)
+    except ValueError as e:
+        click.echo(f"Error reading substructure file: {e}", err=True)
+        sys.exit(1)
+    if sub_mol is None:
+        click.echo("Error: Failed to read molecule from substructure file", err=True)
+        sys.exit(1)
+    click.echo(f"Substructure query: {sub_smiles}")
+
+    # Load results SDF
+    click.echo(f"Loading molecules from: {results_file}")
+    molecules = MoleculeReader.read_molecules(results_file)
+    if not molecules:
+        click.echo("Error: No valid molecules found in results file", err=True)
+        sys.exit(1)
+    click.echo(f"Loaded {len(molecules)} molecule(s)")
+
+    # Deduplicate by SMILES
+    seen = {}
+    for mol, smiles in molecules:
+        if smiles not in seen:
+            seen[smiles] = (mol, smiles)
+    pre_dedup = len(molecules)
+    molecules = list(seen.values())
+    if pre_dedup > len(molecules):
+        click.echo(f"Deduplicated: {len(molecules)} unique ({pre_dedup - len(molecules)} duplicates removed)")
+
+    # Apply filter
+    if exact_substructure_match:
+        filter_func = FingerprintEngine.has_exact_substructure_match
+        filter_name = "Exact substructure"
+    elif atom_substructure_match:
+        filter_func = FingerprintEngine.has_atom_substructure_match
+        filter_name = "Atom-type substructure"
+    else:
+        filter_func = FingerprintEngine.has_generic_substructure_match
+        filter_name = "Generic substructure"
+
+    passed = []
+    for mol, smiles in molecules:
+        if filter_func(sub_mol, smiles):
+            passed.append({'smiles': smiles})
+
+    click.echo(f"\n{filter_name} filter: {len(passed)}/{len(molecules)} passed")
+
+    if not passed:
+        click.echo("No molecules passed the filter.")
+        sys.exit(0)
+
+    # Save results
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"filtered_{timestamp}"
+
+    if output_format in ['sdf', 'both']:
+        sdf_path = output_dir / f"{base_name}.sdf"
+        MoleculeWriter.write_sdf(passed, sdf_path)
+        click.echo(f"SDF output: {sdf_path}")
+
+    if output_format in ['json', 'both']:
+        json_path = output_dir / f"{base_name}.json"
+        json_output = {
+            'substructure_query': sub_smiles,
+            'filter_mode': filter_name,
+            'input_file': str(results_file),
+            'timestamp': timestamp,
+            'total_input': len(molecules),
+            'total_passed': len(passed),
+            'results': passed
+        }
+        MoleculeWriter.write_json(json_output, json_path)
+        click.echo(f"JSON output: {json_path}")
+
+    click.echo(f"\nFiltering completed successfully!")
+
+
 @cli.command(name='list-databases')
 def list_databases():
     """List available databases."""

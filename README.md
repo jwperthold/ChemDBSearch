@@ -10,6 +10,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Batch processing**: Multi-molecule SDF files — each molecule is searched independently
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
 - **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
+- **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
 - **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
@@ -93,6 +94,34 @@ Top 5 results:
 
 SDF output: results/search_results_20260211_154816.sdf
 JSON output: results/search_results_20260211_154816.json
+```
+
+### `filter`
+
+Filter an existing SDF file by substructure match — no API search needed.
+
+```
+python search.py filter RESULTS_FILE SUBSTRUCTURE_FILE [OPTIONS]
+```
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--substructure-match` | `-sub` | | Filter by generic substructure (ignores atom types and bond orders) |
+| `--atom-substructure-match` | `-asub` | | Filter by atom-type substructure (matches atom types, ignores bond orders) |
+| `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
+| `--output-dir` | `-o` | `./results` | Output directory |
+| `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
+| `--verbose` | `-v` | | Enable debug logging |
+
+```bash
+# Filter previous search results by generic substructure
+python search.py filter results/search_results.sdf fragment.sdf -sub
+
+# Filter with atom-type matching
+python search.py filter results/search_results.sdf query.sdf -asub
+
+# Filter with exact substructure
+python search.py filter results/search_results.sdf query.sdf -esub -o ./filtered
 ```
 
 ### `list-databases`
