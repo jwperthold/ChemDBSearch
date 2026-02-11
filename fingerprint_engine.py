@@ -142,6 +142,33 @@ class FingerprintEngine:
         return target_mol.HasSubstructMatch(generic_query)
 
     @staticmethod
+    def make_atom_query(mol: Chem.Mol) -> Chem.Mol:
+        """
+        Convert a molecule to a query that matches atom types
+        but ignores bond orders.
+        """
+        mol = Chem.RemoveHs(mol)
+        params = AdjustQueryParameters.NoAdjustments()
+        params.makeBondsGeneric = True
+        return AdjustQueryProperties(mol, params)
+
+    @staticmethod
+    def has_atom_substructure_match(
+        query_mol: Chem.Mol,
+        target_smiles: str
+    ) -> bool:
+        """
+        Check if target contains the query as a substructure,
+        matching atom types but ignoring bond orders.
+        """
+        target_mol = Chem.MolFromSmiles(target_smiles)
+        if target_mol is None:
+            return False
+        target_mol = Chem.AddHs(target_mol)
+        atom_query = FingerprintEngine.make_atom_query(query_mol)
+        return target_mol.HasSubstructMatch(atom_query)
+
+    @staticmethod
     def has_exact_substructure_match(
         query_mol: Chem.Mol,
         target_smiles: str

@@ -9,7 +9,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Input formats**: `.sdf` and `.pdb` files with 3D coordinates
 - **Batch processing**: Multi-molecule SDF files — each molecule is searched independently
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
-- **Optional substructure filtering**: Generic (`-sub`) or exact (`-esub`), optionally from a separate file (`-sf`)
+- **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
 - **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
@@ -64,8 +64,9 @@ python search.py search INPUT_FILE [OPTIONS]
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
 | `--fingerprint-type` | | `morgan` | Fingerprint type (info only) |
 | `--substructure-match` | `-sub` | | Filter by generic substructure (ignores atom types and bond orders) |
+| `--atom-substructure-match` | `-asub` | | Filter by atom-type substructure (matches atom types, ignores bond orders) |
 | `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
-| `--substructure-file` | `-sf` | | Separate SDF/PDB file to use as substructure filter (with `-sub` or `-esub`) |
+| `--substructure-file` | `-sf` | | Separate SDF/PDB file to use as substructure filter (with `-sub`, `-asub`, or `-esub`) |
 | `--verbose` | `-v` | | Enable debug logging |
 
 **Example output:**
@@ -211,7 +212,7 @@ ECFP4 Tanimoto scores depend heavily on molecule size:
 
 1. **Read** query molecule(s) from `.sdf` or `.pdb`, converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
 2. **Search** the SmallWorld API in parallel (up to 24 concurrent queries) for each query molecule
-3. **Filter** results by Tanimoto threshold and optional substructure match (`-sub`/`-esub`)
+3. **Filter** results by Tanimoto threshold and optional substructure match (`-sub`/`-asub`/`-esub`)
 4. **Deduplicate** results by SMILES (keeping highest similarity per molecule)
 5. **Write** output SDF (with explicit H and MMFF-optimized 3D coordinates) and/or JSON
 

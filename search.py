@@ -78,6 +78,11 @@ def cli():
     help='Only return results whose heavy-atom bond graph contains the query as a substructure (ignores atom types and bond orders)'
 )
 @click.option(
+    '--atom-substructure-match', '-asub',
+    is_flag=True,
+    help='Only return results that match the query atom types as a substructure (ignores bond orders)'
+)
+@click.option(
     '--exact-substructure-match', '-esub',
     is_flag=True,
     help='Only return results that contain the query as an exact substructure (preserves atom types and bond orders)'
@@ -102,6 +107,7 @@ def search(
     output_format: str,
     fingerprint_type: str,
     substructure_match: bool,
+    atom_substructure_match: bool,
     exact_substructure_match: bool,
     substructure_file: Optional[Path],
     verbose: bool
@@ -138,7 +144,7 @@ def search(
 
     # 1b. Load separate substructure filter molecule if provided
     sub_mol = None
-    if substructure_file and (substructure_match or exact_substructure_match):
+    if substructure_file and (substructure_match or atom_substructure_match or exact_substructure_match):
         try:
             sub_mol, sub_smiles = MoleculeReader.read_molecule(substructure_file)
         except ValueError as e:
@@ -216,6 +222,13 @@ def search(
                     if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
                 ]
                 click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
+            elif atom_substructure_match:
+                pre = len(results)
+                results = [
+                    r for r in results
+                    if FingerprintEngine.has_atom_substructure_match(filter_mol, r['smiles'])
+                ]
+                click.echo(f"  Atom-type substructure filter: {len(results)}/{pre}")
             elif substructure_match:
                 pre = len(results)
                 results = [
