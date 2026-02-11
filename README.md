@@ -7,10 +7,12 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 ## Features
 
 - **Input formats**: `.sdf` and `.pdb` files with 3D coordinates
+- **Batch processing**: Multi-molecule SDF files — each molecule is searched independently
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
+- **Substructure filtering**: Generic (`-sub`) or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
-- **Multiple databases**: Enamine REAL (4.5B+), WuXi, ZINC, and more
+- **Multiple databases**: Enamine REAL (10.1B), WuXi, ZINC, and more
 
 ## Installation
 
@@ -32,6 +34,12 @@ python search.py search aspirin.sdf -t 0.3
 
 # Custom parameters
 python search.py search molecule.sdf -t 0.8 -n 50 -o ./my_results --output-format sdf
+
+# Batch search with multi-molecule SDF
+python search.py search multi_query.sdf
+
+# Substructure filter using a separate fragment file
+python search.py search aspirin.sdf -sub -sf fragment.sdf
 
 # Verbose mode for debugging
 python search.py search molecule.pdb -v
@@ -57,6 +65,7 @@ python search.py search INPUT_FILE [OPTIONS]
 | `--fingerprint-type` | | `morgan` | Fingerprint type (info only) |
 | `--substructure-match` | `-sub` | | Filter by generic substructure (ignores atom types and bond orders) |
 | `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
+| `--substructure-file` | `-sf` | | Separate SDF/PDB file to use as substructure filter (with `-sub` or `-esub`) |
 | `--verbose` | `-v` | | Enable debug logging |
 
 **Example output:**

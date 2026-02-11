@@ -81,6 +81,12 @@ def cli():
     help='Only return results that contain the query as an exact substructure (preserves atom types and bond orders)'
 )
 @click.option(
+    '--substructure-file', '-sf',
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help='Separate SDF/PDB file to use as the substructure filter (instead of the query molecule)'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -95,15 +101,18 @@ def search(
     fingerprint_type: str,
     substructure_match: bool,
     exact_substructure_match: bool,
+    substructure_file: Optional[Path],
     verbose: bool
 ):
     """
     Search Enamine REAL Space database for structurally similar molecules.
 
-    INPUT_FILE: Path to SDF or PDB file containing query molecule
+    INPUT_FILE: Path to SDF or PDB file containing one or more query molecules.
+    Multi-molecule SDF files are supported for batch processing.
 
     Example:
-        python search.py aspirin.sdf -t 0.8 -n 50
+        python search.py search aspirin.sdf -t 0.8 -n 50
+        python search.py search multi_query.sdf -v
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -111,76 +120,104 @@ def search(
     click.echo(f"ChemDB Search - Enamine REAL Space Similarity Search")
     click.echo(f"{'='*60}")
 
-    # 1. Read input molecule
-    click.echo(f"\nReading query molecule from: {input_file}")
+    # 1. Read input molecules
+    click.echo(f"\nReading query molecules from: {input_file}")
     try:
-        mol, smiles = MoleculeReader.read_molecule(input_file)
+        queries = MoleculeReader.read_molecules(input_file)
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    if mol is None:
-        click.echo("Error: Failed to read molecule", err=True)
+    if not queries:
+        click.echo("Error: No valid molecules found in input file", err=True)
         sys.exit(1)
 
-    click.echo(f"Query SMILES: {smiles}")
+    click.echo(f"Found {len(queries)} query molecule(s)")
+
+    # 1b. Load separate substructure filter molecule if provided
+    sub_mol = None
+    if substructure_file and (substructure_match or exact_substructure_match):
+        try:
+            sub_mol, sub_smiles = MoleculeReader.read_molecule(substructure_file)
+        except ValueError as e:
+            click.echo(f"Error reading substructure file: {e}", err=True)
+            sys.exit(1)
+        if sub_mol is None:
+            click.echo("Error: Failed to read molecule from substructure file", err=True)
+            sys.exit(1)
+        click.echo(f"Substructure filter molecule: {sub_smiles}")
 
     # 2. Initialize API client
     client = SmallWorldClient()
 
-    # Check API availability
     if not client.is_available():
         click.echo("Warning: Cannot connect to SmallWorld API", err=True)
         click.echo("Continuing anyway...", err=True)
 
-    # 3. Perform similarity search
     click.echo(f"\nSearching database: {database}")
     click.echo(f"Similarity threshold: {threshold}")
-    click.echo(f"Maximum results: {max_results}")
+    click.echo(f"Maximum results per query: {max_results}")
 
-    with click.progressbar(length=1, label='Searching', show_eta=False) as bar:
+    # 3. Search for each query molecule
+    all_results = []
+    query_summaries = []
+
+    for qi, (mol, smiles) in enumerate(queries):
+        click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
+
         results = client.similarity_search(
             smiles=smiles,
             threshold=threshold,
             max_results=max_results,
             database=database
         )
-        bar.update(1)
 
-    if not results:
-        click.echo("\nNo similar molecules found")
-        click.echo("Try lowering the threshold or checking your molecule structure.")
+        if not results:
+            click.echo(f"  No similar molecules found")
+            query_summaries.append({'index': qi, 'smiles': smiles, 'num_results': 0})
+            continue
+
+        # Filter by substructure match if requested
+        filter_mol = sub_mol if sub_mol is not None else mol
+        if exact_substructure_match:
+            pre = len(results)
+            results = [
+                r for r in results
+                if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
+            ]
+            click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
+        elif substructure_match:
+            pre = len(results)
+            results = [
+                r for r in results
+                if FingerprintEngine.has_generic_substructure_match(filter_mol, r['smiles'])
+            ]
+            click.echo(f"  Generic substructure filter: {len(results)}/{pre}")
+
+        # Tag results with query info
+        for r in results:
+            r['query_index'] = qi
+            r['query_smiles'] = smiles
+
+        click.echo(f"  Found {len(results)} results")
+        query_summaries.append({'index': qi, 'smiles': smiles, 'num_results': len(results)})
+        all_results.extend(results)
+
+    if not all_results:
+        click.echo("\nNo results found for any query.")
         sys.exit(0)
 
-    # 3b. Filter by substructure match if requested
-    if exact_substructure_match:
-        pre_filter_count = len(results)
-        results = [
-            r for r in results
-            if FingerprintEngine.has_exact_substructure_match(mol, r['smiles'])
-        ]
-        click.echo(f"\nExact substructure filter: {len(results)}/{pre_filter_count} results contain query substructure")
-    elif substructure_match:
-        pre_filter_count = len(results)
-        results = [
-            r for r in results
-            if FingerprintEngine.has_generic_substructure_match(mol, r['smiles'])
-        ]
-        click.echo(f"\nGeneric substructure filter: {len(results)}/{pre_filter_count} results match query bond graph")
-
-    if not results:
-        click.echo("\nNo results after substructure filtering.")
-        sys.exit(0)
-
-    click.echo(f"\nFound {len(results)} similar molecules")
+    click.echo(f"\n{'='*60}")
+    click.echo(f"Total: {len(all_results)} results from {len(queries)} query molecule(s)")
 
     # 4. Display top results
     click.echo("\nTop 5 results:")
-    for i, result in enumerate(results[:5], 1):
+    for i, result in enumerate(all_results[:5], 1):
         sim = result.get('similarity', 0)
         smiles_str = result.get('smiles', '')[:60]
         mol_id = result.get('id', 'N/A')
-        click.echo(f"  {i}. Similarity: {sim:.3f} | ID: {mol_id}")
+        qi = result.get('query_index', 0)
+        click.echo(f"  {i}. Similarity: {sim:.3f} | ID: {mol_id} | Query: {qi}")
         click.echo(f"     SMILES: {smiles_str}")
 
     # 5. Save results
@@ -190,27 +227,25 @@ def search(
 
     if output_format in ['sdf', 'both']:
         sdf_path = output_dir / f"{base_name}.sdf"
-        MoleculeWriter.write_sdf(results, sdf_path)
+        MoleculeWriter.write_sdf(all_results, sdf_path)
         click.echo(f"\nSDF output: {sdf_path}")
 
     if output_format in ['json', 'both']:
         json_path = output_dir / f"{base_name}.json"
 
-        # Prepare JSON output with metadata
         json_output = {
-            'query': {
-                'smiles': smiles,
-                'input_file': str(input_file),
-                'timestamp': timestamp
-            },
+            'queries': query_summaries,
             'search_params': {
                 'threshold': threshold,
                 'max_results': max_results,
                 'database': database,
                 'fingerprint_type': fingerprint_type
             },
-            'results': results,
-            'num_results': len(results)
+            'input_file': str(input_file),
+            'timestamp': timestamp,
+            'num_queries': len(queries),
+            'total_results': len(all_results),
+            'results': all_results
         }
 
         MoleculeWriter.write_json(json_output, json_path)
