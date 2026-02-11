@@ -1,6 +1,6 @@
 # ChemDB Search
 
-CLI tool for searching chemical databases for structurally similar molecules using ECFP4 Tanimoto similarity.
+CLI tool for searching chemical databases for structurally similar molecules using ECFP4 Tanimoto similarity and optional substructure filters.
 
 Powered by the [SmallWorld API](https://sw.docking.org) — free access to billions of purchasable compounds, no API key required.
 
@@ -222,4 +222,5 @@ Run `python search.py list-databases` for the current list. Common databases inc
 MIT License. See [LICENSE](LICENSE) for details.
 
 SmallWorld API is provided by [UCSF DOCK](https://dock.compbio.ucsf.edu/). Enamine REAL compounds are available for purchase from [Enamine](https://enamine.net/).
+
 
