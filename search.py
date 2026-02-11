@@ -9,6 +9,7 @@ using Tanimoto similarity coefficients.
 import click
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -164,13 +165,22 @@ def search(
     query_summaries = [None] * len(queries)
     per_query_results = [None] * len(queries)
 
-    def _search_one(qi, smiles):
-        return qi, client.similarity_search(
-            smiles=smiles,
-            threshold=threshold,
-            max_results=max_results,
-            database=database
-        )
+    def _search_one(qi, smiles, retries=3, delay=5):
+        for attempt in range(retries):
+            try:
+                return qi, client.similarity_search(
+                    smiles=smiles,
+                    threshold=threshold,
+                    max_results=max_results,
+                    database=database
+                )
+            except Exception as e:
+                if attempt < retries - 1:
+                    logger.warning(f"Query {qi} failed (attempt {attempt + 1}/{retries}): {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Query {qi} failed after {retries} attempts: {e}")
+                    raise
 
     workers = min(len(queries), 24)
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -180,7 +190,14 @@ def search(
         }
         for future in as_completed(futures):
             qi, mol, smiles = futures[future]
-            results = future.result()[1]
+            try:
+                results = future.result()[1]
+            except Exception as e:
+                click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
+                click.echo(f"  Error: {e}", err=True)
+                query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0, 'error': str(e)}
+                per_query_results[qi] = []
+                continue
 
             click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
 
