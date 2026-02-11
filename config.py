@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Search Defaults
     default_similarity_threshold: float = 0.7  # Tanimoto threshold
     default_max_results: int = 100
-    default_database: str = "REAL-Database-22Q1.smi.anon"
+    default_database: str = "REALDB-2025-07.smi.anon"
 
     # Output Configuration
     output_dir: Path = Path("./results")

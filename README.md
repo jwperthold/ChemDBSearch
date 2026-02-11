@@ -51,10 +51,11 @@ python search.py search INPUT_FILE [OPTIONS]
 |--------|-------|---------|-------------|
 | `--threshold` | `-t` | `0.7` | ECFP4 Tanimoto similarity threshold (0.0–1.0) |
 | `--max-results` | `-n` | `100` | Maximum number of results |
-| `--database` | `-d` | `REAL-Database-22Q1.smi.anon` | Database to search |
+| `--database` | `-d` | `REALDB-2025-07.smi.anon` | Database to search |
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
 | `--fingerprint-type` | | `morgan` | Fingerprint type (info only) |
+| `--substructure-match` | `-sub` | | Only keep results containing the query's bond graph as a substructure |
 | `--verbose` | `-v` | | Enable debug logging |
 
 **Example output:**
@@ -66,7 +67,7 @@ ChemDB Search - Enamine REAL Space Similarity Search
 Reading query molecule from: aspirin.sdf
 Query SMILES: CC(=O)Oc1ccccc1C(=O)O
 
-Searching database: REAL-Database-22Q1.smi.anon
+Searching database: REALDB-2025-07.smi.anon
 Similarity threshold: 0.7
 Maximum results: 100
 
@@ -130,7 +131,7 @@ Output SDF files contain:
   "search_params": {
     "threshold": 0.7,
     "max_results": 100,
-    "database": "REAL-Database-22Q1.smi.anon"
+    "database": "REALDB-2025-07.smi.anon"
   },
   "num_results": 5,
   "results": [

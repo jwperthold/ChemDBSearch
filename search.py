@@ -71,6 +71,11 @@ def cli():
     help='Fingerprint type for local validation (info only)'
 )
 @click.option(
+    '--substructure-match', '-sub',
+    is_flag=True,
+    help='Only return results whose heavy-atom bond graph contains the query as a substructure (ignores atom types and bond orders)'
+)
+@click.option(
     '--verbose', '-v',
     is_flag=True,
     help='Verbose output'
@@ -83,6 +88,7 @@ def search(
     output_dir: Path,
     output_format: str,
     fingerprint_type: str,
+    substructure_match: bool,
     verbose: bool
 ):
     """
@@ -138,6 +144,19 @@ def search(
     if not results:
         click.echo("\nNo similar molecules found")
         click.echo("Try lowering the threshold or checking your molecule structure.")
+        sys.exit(0)
+
+    # 3b. Filter by generic substructure match if requested
+    if substructure_match:
+        pre_filter_count = len(results)
+        results = [
+            r for r in results
+            if FingerprintEngine.has_generic_substructure_match(mol, r['smiles'])
+        ]
+        click.echo(f"\nSubstructure filter: {len(results)}/{pre_filter_count} results match query bond graph")
+
+    if not results:
+        click.echo("\nNo results after substructure filtering.")
         sys.exit(0)
 
     click.echo(f"\nFound {len(results)} similar molecules")

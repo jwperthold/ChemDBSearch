@@ -1,6 +1,6 @@
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
-from typing import List, Tuple
+from rdkit.Chem import AllChem, DataStructs, AdjustQueryParameters, AdjustQueryProperties
+from typing import List, Tuple, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -99,3 +99,44 @@ class FingerprintEngine:
         # Sort by similarity descending
         results.sort(key=lambda x: x[1], reverse=True)
         return results
+
+    @staticmethod
+    def make_generic_query(mol: Chem.Mol) -> Chem.Mol:
+        """
+        Convert a molecule to a generic query that matches only the
+        heavy-atom bond graph (ignoring atom types and bond orders).
+
+        Args:
+            mol: RDKit molecule object
+
+        Returns:
+            Generic query molecule for substructure matching
+        """
+        mol = Chem.RemoveHs(mol)
+        params = AdjustQueryParameters.NoAdjustments()
+        params.makeAtomsGeneric = True
+        params.makeBondsGeneric = True
+        return AdjustQueryProperties(mol, params)
+
+    @staticmethod
+    def has_generic_substructure_match(
+        query_mol: Chem.Mol,
+        target_smiles: str
+    ) -> bool:
+        """
+        Check if target contains the query's heavy-atom bond graph
+        as a substructure (ignoring atom types and bond orders).
+
+        Args:
+            query_mol: Query molecule (will be converted to generic query)
+            target_smiles: SMILES of the target molecule
+
+        Returns:
+            True if the target contains the query's connectivity pattern
+        """
+        target_mol = Chem.MolFromSmiles(target_smiles)
+        if target_mol is None:
+            return False
+        target_mol = Chem.AddHs(target_mol)
+        generic_query = FingerprintEngine.make_generic_query(query_mol)
+        return target_mol.HasSubstructMatch(generic_query)
