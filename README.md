@@ -209,10 +209,11 @@ ECFP4 Tanimoto scores depend heavily on molecule size:
 
 ## How It Works
 
-1. **Read** the query molecule from `.sdf` or `.pdb`, converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
-2. **Search** the SmallWorld API, which uses graph-edit distance for candidate retrieval and scores results with ECFP4 Tanimoto
-3. **Filter** results by the user's Tanimoto threshold
-4. **Write** output SDF (with explicit H and MMFF-optimized 3D coordinates) and/or JSON
+1. **Read** query molecule(s) from `.sdf` or `.pdb`, converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
+2. **Search** the SmallWorld API in parallel (up to 24 concurrent queries) for each query molecule
+3. **Filter** results by Tanimoto threshold and optional substructure match (`-sub`/`-esub`)
+4. **Deduplicate** results by SMILES (keeping highest similarity per molecule)
+5. **Write** output SDF (with explicit H and MMFF-optimized 3D coordinates) and/or JSON
 
 ## Available Databases
 

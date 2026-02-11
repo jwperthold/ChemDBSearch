@@ -9,6 +9,7 @@ using Tanimoto similarity coefficients.
 import click
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -158,57 +159,84 @@ def search(
     click.echo(f"Similarity threshold: {threshold}")
     click.echo(f"Maximum results per query: {max_results}")
 
-    # 3. Search for each query molecule
+    # 3. Search for each query molecule (parallel API calls)
     all_results = []
-    query_summaries = []
+    query_summaries = [None] * len(queries)
+    per_query_results = [None] * len(queries)
 
-    for qi, (mol, smiles) in enumerate(queries):
-        click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
-
-        results = client.similarity_search(
+    def _search_one(qi, smiles):
+        return qi, client.similarity_search(
             smiles=smiles,
             threshold=threshold,
             max_results=max_results,
             database=database
         )
 
-        if not results:
-            click.echo(f"  No similar molecules found")
-            query_summaries.append({'index': qi, 'smiles': smiles, 'num_results': 0})
-            continue
+    workers = min(len(queries), 24)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_search_one, qi, smiles): (qi, mol, smiles)
+            for qi, (mol, smiles) in enumerate(queries)
+        }
+        for future in as_completed(futures):
+            qi, mol, smiles = futures[future]
+            results = future.result()[1]
 
-        # Filter by substructure match if requested
-        filter_mol = sub_mol if sub_mol is not None else mol
-        if exact_substructure_match:
-            pre = len(results)
-            results = [
-                r for r in results
-                if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
-            ]
-            click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
-        elif substructure_match:
-            pre = len(results)
-            results = [
-                r for r in results
-                if FingerprintEngine.has_generic_substructure_match(filter_mol, r['smiles'])
-            ]
-            click.echo(f"  Generic substructure filter: {len(results)}/{pre}")
+            click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
 
-        # Tag results with query info
-        for r in results:
-            r['query_index'] = qi
-            r['query_smiles'] = smiles
+            if not results:
+                click.echo(f"  No similar molecules found")
+                query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0}
+                per_query_results[qi] = []
+                continue
 
-        click.echo(f"  Found {len(results)} results")
-        query_summaries.append({'index': qi, 'smiles': smiles, 'num_results': len(results)})
-        all_results.extend(results)
+            # Filter by substructure match if requested
+            filter_mol = sub_mol if sub_mol is not None else mol
+            if exact_substructure_match:
+                pre = len(results)
+                results = [
+                    r for r in results
+                    if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
+                ]
+                click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
+            elif substructure_match:
+                pre = len(results)
+                results = [
+                    r for r in results
+                    if FingerprintEngine.has_generic_substructure_match(filter_mol, r['smiles'])
+                ]
+                click.echo(f"  Generic substructure filter: {len(results)}/{pre}")
+
+            for r in results:
+                r['query_index'] = qi
+                r['query_smiles'] = smiles
+
+            click.echo(f"  Found {len(results)} results")
+            query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': len(results)}
+            per_query_results[qi] = results
+
+    # Combine results in query order and deduplicate by SMILES
+    for results in per_query_results:
+        if results:
+            all_results.extend(results)
 
     if not all_results:
         click.echo("\nNo results found for any query.")
         sys.exit(0)
 
+    # Deduplicate: keep the entry with the highest similarity for each SMILES
+    seen = {}
+    for r in all_results:
+        smi = r['smiles']
+        if smi not in seen or r.get('similarity', 0) > seen[smi].get('similarity', 0):
+            seen[smi] = r
+    pre_dedup = len(all_results)
+    all_results = sorted(seen.values(), key=lambda r: r.get('similarity', 0), reverse=True)
+
     click.echo(f"\n{'='*60}")
-    click.echo(f"Total: {len(all_results)} results from {len(queries)} query molecule(s)")
+    click.echo(f"Total: {len(all_results)} unique results from {len(queries)} query molecule(s)")
+    if pre_dedup > len(all_results):
+        click.echo(f"  ({pre_dedup - len(all_results)} duplicates removed)")
 
     # 4. Display top results
     click.echo("\nTop 5 results:")
