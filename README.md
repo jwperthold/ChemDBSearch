@@ -145,6 +145,10 @@ python search.py cluster INPUT_FILE [OPTIONS]
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--n-clusters` | `-n` | `100` | Number of clusters |
+| `--substructure-match` | `-sub` | | Pre-filter by generic substructure before clustering |
+| `--atom-substructure-match` | `-asub` | | Pre-filter by atom-type substructure before clustering |
+| `--exact-substructure-match` | `-esub` | | Pre-filter by exact substructure before clustering |
+| `--substructure-file` | `-sf` | | SDF/PDB/SMI file with the substructure query (required with `-sub`/`-asub`/`-esub`) |
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
 | `--png` | | | Write 2D depiction PNGs into a subfolder |
@@ -154,6 +158,9 @@ python search.py cluster INPUT_FILE [OPTIONS]
 ```bash
 # Cluster search results into 50 groups, output medoids
 python search.py cluster results/search_results.sdf -n 50
+
+# Pre-filter by substructure, then cluster the matches
+python search.py cluster molecules.smi -n 100 -esub -sf fragment.sdf
 
 # Custom output directory
 python search.py cluster results/search_results.sdf -n 100 -o ./clustered

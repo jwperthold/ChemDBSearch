@@ -517,6 +517,27 @@ def filter(
     help='Number of clusters (default: 100)'
 )
 @click.option(
+    '--substructure-match', '-sub',
+    is_flag=True,
+    help='Only cluster molecules whose heavy-atom bond graph contains the substructure query'
+)
+@click.option(
+    '--atom-substructure-match', '-asub',
+    is_flag=True,
+    help='Only cluster molecules that match the substructure query atom types'
+)
+@click.option(
+    '--exact-substructure-match', '-esub',
+    is_flag=True,
+    help='Only cluster molecules that contain the query as an exact substructure'
+)
+@click.option(
+    '--substructure-file', '-sf',
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help='SDF/PDB/SMI file with the substructure query molecule (required with -sub/-asub/-esub)'
+)
+@click.option(
     '--output-dir', '-o',
     type=click.Path(path_type=Path),
     default=settings.output_dir,
@@ -546,6 +567,10 @@ def filter(
 def cluster(
     input_file: Path,
     n_clusters: int,
+    substructure_match: bool,
+    atom_substructure_match: bool,
+    exact_substructure_match: bool,
+    substructure_file: Optional[Path],
     output_dir: Path,
     output_format: str,
     png: bool,
@@ -557,6 +582,9 @@ def cluster(
 
     INPUT_FILE: SDF or SMI file containing molecules to cluster.
 
+    Optionally pre-filter molecules by substructure before clustering
+    using -sub/-asub/-esub with -sf.
+
     Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric
     used by the search command — to compute pairwise Tanimoto distances,
     clusters into N groups using agglomerative clustering, and outputs the
@@ -564,7 +592,7 @@ def cluster(
 
     Example:
         python search.py cluster results.sdf -n 50
-        python search.py cluster molecules.sdf -n 200 --output-format sdf
+        python search.py cluster molecules.smi -n 200 -esub -sf fragment.sdf
     """
     from sklearn.cluster import AgglomerativeClustering
 
@@ -574,22 +602,61 @@ def cluster(
     click.echo(f"ChemDB Search - Molecular Clustering")
     click.echo(f"{'='*60}")
 
-    # Load molecules
+    # Load substructure filter if requested
+    use_filter = substructure_match or atom_substructure_match or exact_substructure_match
+    if use_filter:
+        if not substructure_file:
+            click.echo("Error: -sf is required when using -sub, -asub, or -esub", err=True)
+            sys.exit(1)
+        try:
+            sub_mol, sub_smiles = MoleculeReader.read_molecule(substructure_file)
+        except ValueError as e:
+            click.echo(f"Error reading substructure file: {e}", err=True)
+            sys.exit(1)
+        if sub_mol is None:
+            click.echo("Error: Failed to read molecule from substructure file", err=True)
+            sys.exit(1)
+        click.echo(f"Substructure query: {sub_smiles}")
+
+        if exact_substructure_match:
+            filter_func = FingerprintEngine.has_exact_substructure_match
+            filter_name = "Exact substructure"
+        elif atom_substructure_match:
+            filter_func = FingerprintEngine.has_atom_substructure_match
+            filter_name = "Atom-type substructure"
+        else:
+            filter_func = FingerprintEngine.has_generic_substructure_match
+            filter_name = "Generic substructure"
+
+    # Stream, deduplicate, and optionally filter molecules
     click.echo(f"Loading molecules from: {input_file}")
-    molecules = MoleculeReader.read_molecules(input_file)
+    seen = set()
+    molecules = []
+    total = 0
+    duplicates = 0
+
+    for mol, smiles in MoleculeReader.iter_molecules(input_file):
+        total += 1
+        if total % 1_000_000 == 0:
+            click.echo(f"  processed {total:,} molecules ({len(molecules):,} kept so far)...")
+        if smiles in seen:
+            duplicates += 1
+            continue
+        seen.add(smiles)
+        if use_filter and not filter_func(sub_mol, smiles):
+            continue
+        molecules.append((mol, smiles))
+
     if not molecules:
-        click.echo("Error: No valid molecules found", err=True)
+        click.echo("Error: No valid molecules found (after filtering)", err=True)
         sys.exit(1)
 
-    # Deduplicate
-    seen = {}
-    for mol, smiles in molecules:
-        if smiles not in seen:
-            seen[smiles] = (mol, smiles)
-    pre_dedup = len(molecules)
-    molecules = list(seen.values())
-    if pre_dedup > len(molecules):
-        click.echo(f"Deduplicated: {len(molecules)} unique ({pre_dedup - len(molecules)} duplicates removed)")
+    unique = total - duplicates
+    click.echo(f"Processed {total:,} molecules ({unique:,} unique)")
+    if duplicates:
+        click.echo(f"  ({duplicates:,} duplicates removed)")
+    if use_filter:
+        click.echo(f"  {filter_name} filter: {len(molecules):,}/{unique:,} passed")
 
     n_mols = len(molecules)
     if n_clusters >= n_mols:
@@ -673,8 +740,11 @@ def cluster(
             'n_clusters': n_clusters,
             'n_molecules': n_mols,
             'fingerprint_type': 'ECFP4 (Morgan radius=2, 2048 bits)',
-            'medoids': medoids
         }
+        if use_filter:
+            json_output['substructure_query'] = sub_smiles
+            json_output['filter_mode'] = filter_name
+        json_output['medoids'] = medoids
         MoleculeWriter.write_json(json_output, json_path)
         click.echo(f"JSON output: {json_path}")
 
