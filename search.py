@@ -94,7 +94,7 @@ def cli():
     '--substructure-file', '-sf',
     type=click.Path(exists=True, path_type=Path),
     default=None,
-    help='Separate SDF/PDB file to use as the substructure filter (instead of the query molecule)'
+    help='Separate SDF/PDB/SMI file to use as the substructure filter (instead of the query molecule)'
 )
 @click.option(
     '--png',
@@ -130,12 +130,12 @@ def search(
     """
     Search Enamine REAL Space database for structurally similar molecules.
 
-    INPUT_FILE: Path to SDF or PDB file containing one or more query molecules.
-    Multi-molecule SDF files are supported for batch processing.
+    INPUT_FILE: Path to SDF, PDB, or SMI file containing one or more query molecules.
+    Multi-molecule SDF and SMI files are supported for batch processing.
 
     Example:
         python search.py search aspirin.sdf -t 0.8 -n 50
-        python search.py search multi_query.sdf -v
+        python search.py search queries.smi -v
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -395,16 +395,16 @@ def filter(
     verbose: bool
 ):
     """
-    Filter an existing SDF file by substructure match.
+    Filter an existing molecule file by substructure match.
 
-    RESULTS_FILE: SDF file containing molecules to filter.
-    SUBSTRUCTURE_FILE: SDF/PDB file with the substructure query molecule.
+    RESULTS_FILE: SDF/SMI file containing molecules to filter.
+    SUBSTRUCTURE_FILE: SDF/PDB/SMI file with the substructure query molecule.
 
     Requires one of -sub, -asub, or -esub.
 
     Example:
         python search.py filter results.sdf fragment.sdf -sub
-        python search.py filter results.sdf query.sdf -asub
+        python search.py filter results.smi query.sdf -asub
         python search.py filter results.sdf query.sdf -esub -o ./filtered
     """
     if verbose:
@@ -428,25 +428,7 @@ def filter(
         sys.exit(1)
     click.echo(f"Substructure query: {sub_smiles}")
 
-    # Load results SDF
-    click.echo(f"Loading molecules from: {results_file}")
-    molecules = MoleculeReader.read_molecules(results_file)
-    if not molecules:
-        click.echo("Error: No valid molecules found in results file", err=True)
-        sys.exit(1)
-    click.echo(f"Loaded {len(molecules)} molecule(s)")
-
-    # Deduplicate by SMILES
-    seen = {}
-    for mol, smiles in molecules:
-        if smiles not in seen:
-            seen[smiles] = (mol, smiles)
-    pre_dedup = len(molecules)
-    molecules = list(seen.values())
-    if pre_dedup > len(molecules):
-        click.echo(f"Deduplicated: {len(molecules)} unique ({pre_dedup - len(molecules)} duplicates removed)")
-
-    # Apply filter
+    # Select filter function
     if exact_substructure_match:
         filter_func = FingerprintEngine.has_exact_substructure_match
         filter_name = "Exact substructure"
@@ -457,12 +439,33 @@ def filter(
         filter_func = FingerprintEngine.has_generic_substructure_match
         filter_name = "Generic substructure"
 
+    # Stream molecules: deduplicate and filter in one pass (memory-efficient)
+    click.echo(f"Streaming molecules from: {results_file}")
+    seen = set()
     passed = []
-    for mol, smiles in molecules:
+    total = 0
+    duplicates = 0
+
+    for _, smiles in MoleculeReader.iter_molecules(results_file):
+        total += 1
+        if total % 1_000_000 == 0:
+            click.echo(f"  processed {total:,} molecules ({len(passed):,} passed so far)...")
+        if smiles in seen:
+            duplicates += 1
+            continue
+        seen.add(smiles)
         if filter_func(sub_mol, smiles):
             passed.append({'smiles': smiles})
 
-    click.echo(f"\n{filter_name} filter: {len(passed)}/{len(molecules)} passed")
+    if total == 0:
+        click.echo("Error: No valid molecules found in results file", err=True)
+        sys.exit(1)
+
+    unique = total - duplicates
+    click.echo(f"\nProcessed {total:,} molecules ({unique:,} unique)")
+    if duplicates:
+        click.echo(f"  ({duplicates:,} duplicates removed)")
+    click.echo(f"{filter_name} filter: {len(passed):,}/{unique:,} passed")
 
     if not passed:
         click.echo("No molecules passed the filter.")
@@ -485,7 +488,7 @@ def filter(
             'filter_mode': filter_name,
             'input_file': str(results_file),
             'timestamp': timestamp,
-            'total_input': len(molecules),
+            'total_input': unique,
             'total_passed': len(passed),
             'results': passed
         }
@@ -552,7 +555,7 @@ def cluster(
     """
     Cluster molecules by ECFP4 Tanimoto similarity and output medoids.
 
-    INPUT_FILE: SDF file containing molecules to cluster.
+    INPUT_FILE: SDF or SMI file containing molecules to cluster.
 
     Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric
     used by the search command — to compute pairwise Tanimoto distances,

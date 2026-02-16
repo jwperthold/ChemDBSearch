@@ -6,8 +6,8 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 
 ## Features
 
-- **Input formats**: `.sdf` and `.pdb` files with 3D coordinates
-- **Batch processing**: Multi-molecule SDF files — each molecule is searched independently
+- **Input formats**: `.sdf`, `.pdb`, and `.smi` files (all optionally gzip-compressed, e.g. `.sdf.gz`)
+- **Batch processing**: Multi-molecule SDF and SMI files — each molecule is searched independently
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
 - **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
@@ -38,8 +38,12 @@ python search.py search aspirin.sdf -t 0.3
 # Custom parameters
 python search.py search molecule.sdf -t 0.8 -n 50 -o ./my_results --output-format sdf
 
-# Batch search with multi-molecule SDF
+# Batch search with multi-molecule SDF or SMI
 python search.py search multi_query.sdf
+python search.py search queries.smi
+
+# Gzip-compressed input
+python search.py search molecules.sdf.gz -t 0.5
 
 # Substructure filter using a separate fragment file
 python search.py search aspirin.sdf -sub -sf fragment.sdf
@@ -69,7 +73,7 @@ python search.py search INPUT_FILE [OPTIONS]
 | `--substructure-match` | `-sub` | | Filter by generic substructure (ignores atom types and bond orders) |
 | `--atom-substructure-match` | `-asub` | | Filter by atom-type substructure (matches atom types, ignores bond orders) |
 | `--exact-substructure-match` | `-esub` | | Filter by exact substructure (preserves atom types and bond orders) |
-| `--substructure-file` | `-sf` | | Separate SDF/PDB file to use as substructure filter (with `-sub`, `-asub`, or `-esub`) |
+| `--substructure-file` | `-sf` | | Separate SDF/PDB/SMI file to use as substructure filter (with `-sub`, `-asub`, or `-esub`) |
 | `--png` | | | Write 2D depiction PNGs into a subfolder |
 | `--svg` | | | Write 2D depiction SVGs into a subfolder |
 | `--verbose` | `-v` | | Enable debug logging |
@@ -102,7 +106,7 @@ JSON output: results/search_results_20260211_154816.json
 
 ### `filter`
 
-Filter an existing SDF file by substructure match — no API search needed.
+Filter an existing molecule file by substructure match — no API search needed.
 
 ```
 python search.py filter RESULTS_FILE SUBSTRUCTURE_FILE [OPTIONS]
@@ -237,7 +241,7 @@ CHEMDB_OUTPUT_DIR=./my_results
 ```
 ChemDBSearch/
 ├── search.py                         # CLI entry point
-├── molecule_io.py                    # SDF/PDB reading and SDF/JSON writing
+├── molecule_io.py                    # SDF/PDB/SMI reading (with .gz support) and SDF/JSON writing
 ├── fingerprint_engine.py             # Local Tanimoto similarity calculations
 ├── config.py                         # Pydantic settings management
 ├── api_clients/
@@ -272,7 +276,7 @@ ECFP4 Tanimoto scores depend heavily on molecule size:
 
 ## How It Works
 
-1. **Read** query molecule(s) from `.sdf` or `.pdb`, converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
+1. **Read** query molecule(s) from `.sdf`, `.pdb`, or `.smi` (optionally `.gz`-compressed), converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
 2. **Search** the SmallWorld API in parallel (up to 24 concurrent queries) for each query molecule
 3. **Filter** results by Tanimoto threshold and optional substructure match (`-sub`/`-asub`/`-esub`)
 4. **Deduplicate** results by SMILES (keeping highest similarity per molecule)
