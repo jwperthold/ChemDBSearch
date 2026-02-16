@@ -11,7 +11,7 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 - **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
 - **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
-- **Clustering**: Group molecules by pairwise Tanimoto similarity and extract representative medoids
+- **Clustering**: MaxMin diversity picking with Tanimoto distance — scalable to 700k+ molecules
 - **Stereochemistry preservation**: Chiral centers and E/Z geometry from 3D coordinates are retained throughout the pipeline
 - **2D depictions**: Optional PNG and SVG images of each result molecule (`--png`, `--svg`)
 - **Output formats**: SDF files (with explicit hydrogens and MMFF-optimized 3D coordinates) and JSON
@@ -166,7 +166,7 @@ python search.py cluster molecules.smi -n 100 -esub -sf fragment.sdf
 python search.py cluster results/search_results.sdf -n 100 -o ./clustered
 ```
 
-Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric as the search command. Duplicates are removed by SMILES before clustering. The output contains one molecule per cluster (the medoid — the member with the smallest average distance to all other cluster members), sorted by molecular weight ascending.
+Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) with MaxMin diversity picking (Tanimoto distance) to select N maximally diverse representatives. Duplicates are removed by SMILES first. Remaining molecules are assigned to the nearest medoid to determine cluster sizes. Output is sorted by molecular weight ascending.
 
 ### `list-databases`
 

@@ -585,17 +585,15 @@ def cluster(
     Optionally pre-filter molecules by substructure before clustering
     using -sub/-asub/-esub with -sf.
 
-    Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) — the same metric
-    used by the search command — to compute pairwise Tanimoto distances,
-    clusters into N groups using agglomerative clustering, and outputs the
-    medoid (most central member) of each cluster.
+    Uses ECFP4 fingerprints (Morgan radius=2, 2048 bits) with MaxMin
+    diversity picking to select N maximally diverse representatives
+    using Tanimoto distance, then assigns remaining molecules to
+    the nearest medoid to form clusters.
 
     Example:
         python search.py cluster results.sdf -n 50
         python search.py cluster molecules.smi -n 200 -esub -sf fragment.sdf
     """
-    from sklearn.cluster import AgglomerativeClustering
-
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
@@ -667,50 +665,36 @@ def cluster(
     click.echo(f"Target clusters: {n_clusters}")
     click.echo(f"Fingerprint: ECFP4 (Morgan radius=2, 2048 bits)")
 
-    # Generate ECFP4 fingerprints (same as SmallWorld search)
+    # Generate ECFP4 fingerprints
     click.echo("\nGenerating fingerprints...")
+    from rdkit import DataStructs
+    from rdkit.SimDivFilters import rdSimDivPickers
     fps = []
     for mol, smiles in molecules:
         fp = FingerprintEngine.generate_fingerprint(mol, 'morgan', radius=2, n_bits=2048)
         fps.append(fp)
 
-    # Compute pairwise distance matrix (1 - Tanimoto)
-    click.echo("Computing pairwise similarity matrix...")
-    from rdkit import DataStructs
-    dist_matrix = np.zeros((n_mols, n_mols))
+    # MaxMin diversity picking (maximally diverse medoids using Tanimoto distance)
+    click.echo("Selecting diverse medoids (MaxMin picking)...")
+    picker = rdSimDivPickers.MaxMinPicker()
+    pick_indices = list(picker.LazyBitVectorPick(fps, n_mols, n_clusters))
+
+    # Assign each molecule to its nearest medoid by Tanimoto similarity
+    click.echo("Assigning molecules to clusters...")
+    picked_fps = [fps[i] for i in pick_indices]
+    cluster_sizes = [0] * n_clusters
     for i in range(n_mols):
-        sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[i + 1:])
-        dist_matrix[i, i + 1:] = 1.0 - np.array(sims)
-        dist_matrix[i + 1:, i] = dist_matrix[i, i + 1:]
+        sims = DataStructs.BulkTanimotoSimilarity(fps[i], picked_fps)
+        cluster_sizes[int(np.argmax(sims))] += 1
 
-    # Cluster
-    click.echo("Clustering...")
-    clustering = AgglomerativeClustering(
-        n_clusters=n_clusters,
-        metric='precomputed',
-        linkage='average'
-    )
-    labels = clustering.fit_predict(dist_matrix)
-
-    # Find medoid of each cluster
-    click.echo("Selecting cluster medoids...")
     medoids = []
-    for c in range(n_clusters):
-        members = np.where(labels == c)[0]
-        if len(members) == 1:
-            medoid_idx = members[0]
-        else:
-            # Medoid = member with smallest avg distance to other members
-            sub_dist = dist_matrix[np.ix_(members, members)]
-            avg_dists = sub_dist.mean(axis=1)
-            medoid_idx = members[np.argmin(avg_dists)]
-
-        mol, smiles = molecules[medoid_idx]
+    for c, idx in enumerate(pick_indices):
+        mol, smiles = molecules[idx]
         mw = Descriptors.ExactMolWt(mol)
         medoids.append({
             'smiles': smiles,
             'cluster': int(c),
-            'cluster_size': int(len(members)),
+            'cluster_size': int(cluster_sizes[c]),
             'molecular_weight': round(mw, 2),
         })
 
