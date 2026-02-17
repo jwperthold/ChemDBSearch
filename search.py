@@ -7,6 +7,7 @@ using Tanimoto similarity coefficients.
 """
 
 import click
+import heapq
 import logging
 import sys
 import time
@@ -16,8 +17,8 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from rdkit import Chem
-from rdkit.Chem import Descriptors
+from rdkit import Chem, DataStructs
+from rdkit.Chem import Descriptors, rdFingerprintGenerator, rdMolDescriptors
 
 from config import settings
 from molecule_io import MoleculeReader, MoleculeWriter
@@ -65,6 +66,263 @@ def _filter_one_smiles(raw_smiles):
     return (canonical, mol.HasSubstructMatch(_worker_query))
 
 
+# --- Multiprocessing workers for local similarity search ---
+_local_query_data = None   # list of (qi, fingerprint, sub_query_or_None)
+_local_threshold = None
+_local_sub_mode = None
+_local_fp_gen = None
+
+
+def _init_local_search_worker(query_smiles_list, threshold, shared_sub_smiles, sub_mode):
+    """Per-worker init: build query fingerprints and substructure queries."""
+    global _local_query_data, _local_threshold, _local_sub_mode, _local_fp_gen
+    _local_threshold = threshold
+    _local_sub_mode = sub_mode
+    _local_fp_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+
+    # Build shared substructure query if -sf was provided
+    shared_sq = None
+    if shared_sub_smiles and sub_mode:
+        sm = Chem.MolFromSmiles(shared_sub_smiles)
+        if sm:
+            if sub_mode == 'generic':
+                shared_sq = FingerprintEngine.make_generic_query(sm)
+            elif sub_mode == 'atom':
+                shared_sq = FingerprintEngine.make_atom_query(sm)
+            else:
+                shared_sq = Chem.RemoveHs(sm)
+
+    _local_query_data = []
+    for qi, smi in enumerate(query_smiles_list):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        fp = _local_fp_gen.GetFingerprint(mol)
+        if sub_mode:
+            if shared_sq:
+                sq = shared_sq
+            elif sub_mode == 'generic':
+                sq = FingerprintEngine.make_generic_query(mol)
+            elif sub_mode == 'atom':
+                sq = FingerprintEngine.make_atom_query(mol)
+            else:
+                sq = Chem.RemoveHs(mol)
+        else:
+            sq = None
+        _local_query_data.append((qi, fp, sq))
+
+
+def _local_search_one_smiles(raw_line):
+    """Worker: parse SMILES, compute ECFP4 Tanimoto against all queries.
+    Returns list of (query_index, result_dict) for hits, or None."""
+    parts = raw_line.split(None, 1)
+    raw_smiles = parts[0]
+    name = parts[1].strip() if len(parts) > 1 else None
+
+    mol = Chem.MolFromSmiles(raw_smiles)
+    if mol is None:
+        return None
+
+    canonical = Chem.MolToSmiles(mol, isomericSmiles=True)
+    fp = _local_fp_gen.GetFingerprint(mol)
+
+    query_fps = [qfp for _, qfp, _ in _local_query_data]
+    sims = DataStructs.BulkTanimotoSimilarity(fp, query_fps)
+
+    # Precompute AddHs target if needed for substructure checks
+    target_with_h = None
+    if _local_sub_mode in ('generic', 'atom'):
+        target_with_h = Chem.AddHs(mol)
+
+    hits = []
+    mw = None
+    mf = None
+    for idx, sim in enumerate(sims):
+        if sim < _local_threshold:
+            continue
+        qi, _, sq = _local_query_data[idx]
+        if sq is not None:
+            if _local_sub_mode in ('generic', 'atom'):
+                if not target_with_h.HasSubstructMatch(sq):
+                    continue
+            elif not mol.HasSubstructMatch(sq):
+                continue
+        if mw is None:
+            mw = str(round(Descriptors.ExactMolWt(mol), 2))
+            mf = rdMolDescriptors.CalcMolFormula(mol)
+        hits.append((qi, {
+            'smiles': canonical,
+            'similarity': round(sim, 4),
+            'id': name or 'N/A',
+            'molecular_weight': mw,
+            'molecular_formula': mf,
+        }))
+
+    return hits if hits else None
+
+
+def _local_search(local_db, queries, threshold, max_results,
+                  sub_mol, substructure_match, atom_substructure_match,
+                  exact_substructure_match):
+    """Search local molecule file, return (query_summaries, per_query_results)."""
+    import os
+
+    n_queries = len(queries)
+    query_smiles_list = [smiles for _, smiles in queries]
+
+    sub_mode = None
+    if exact_substructure_match:
+        sub_mode = 'exact'
+    elif atom_substructure_match:
+        sub_mode = 'atom'
+    elif substructure_match:
+        sub_mode = 'generic'
+
+    shared_sub_smiles = (Chem.MolToSmiles(sub_mol, isomericSmiles=True)
+                         if sub_mol is not None else None)
+
+    fmt, is_gz = MoleculeReader._resolve_format(local_db)
+    n_workers = os.cpu_count() or 1
+
+    # Per-query heaps for top-N (min-heap by similarity)
+    query_heaps = [[] for _ in range(n_queries)]
+    seen = set()
+    total = 0
+    counter = 0
+
+    if fmt == '.smi' and n_workers >= 2:
+        import gzip
+        from multiprocessing import Pool
+
+        click.echo(f"Searching local database: {local_db} ({n_workers} workers)")
+        opener = gzip.open if is_gz else open
+        with opener(local_db, 'rt') as f:
+            def _raw_lines():
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    yield line
+
+            with Pool(n_workers, initializer=_init_local_search_worker,
+                      initargs=(query_smiles_list, threshold,
+                                shared_sub_smiles, sub_mode)) as pool:
+                for worker_result in pool.imap(
+                    _local_search_one_smiles, _raw_lines(), chunksize=10000
+                ):
+                    total += 1
+                    if total % 1_000_000 == 0:
+                        hits = sum(len(h) for h in query_heaps)
+                        click.echo(f"  searched {total:,} molecules "
+                                   f"({hits:,} hits so far)...")
+                    if worker_result is None:
+                        continue
+                    canonical = worker_result[0][1]['smiles']
+                    if canonical in seen:
+                        continue
+                    seen.add(canonical)
+                    for qi, result_dict in worker_result:
+                        heap = query_heaps[qi]
+                        sim = result_dict['similarity']
+                        entry = (sim, counter, result_dict)
+                        counter += 1
+                        if len(heap) < max_results:
+                            heapq.heappush(heap, entry)
+                        elif sim > heap[0][0]:
+                            heapq.heapreplace(heap, entry)
+    else:
+        click.echo(f"Searching local database: {local_db}")
+        fp_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+
+        # Build query fingerprints and per-query substructure queries
+        query_fps = []
+        sub_queries = []
+        for qi, (mol, smiles) in enumerate(queries):
+            query_fps.append(fp_gen.GetFingerprint(mol))
+            if sub_mode:
+                filter_mol = sub_mol if sub_mol is not None else mol
+                if sub_mode == 'generic':
+                    sub_queries.append(FingerprintEngine.make_generic_query(filter_mol))
+                elif sub_mode == 'atom':
+                    sub_queries.append(FingerprintEngine.make_atom_query(filter_mol))
+                else:
+                    sub_queries.append(Chem.RemoveHs(filter_mol))
+            else:
+                sub_queries.append(None)
+
+        for mol, smiles in MoleculeReader.iter_molecules(local_db):
+            total += 1
+            if total % 1_000_000 == 0:
+                hits = sum(len(h) for h in query_heaps)
+                click.echo(f"  searched {total:,} molecules "
+                           f"({hits:,} hits so far)...")
+            if smiles in seen:
+                continue
+            seen.add(smiles)
+
+            fp = fp_gen.GetFingerprint(mol)
+            sims = DataStructs.BulkTanimotoSimilarity(fp, query_fps)
+
+            target_with_h = None
+            if sub_mode in ('generic', 'atom'):
+                target_with_h = Chem.AddHs(mol)
+
+            mw = None
+            mf = None
+            for qi, sim in enumerate(sims):
+                if sim < threshold:
+                    continue
+                sq = sub_queries[qi]
+                if sq is not None:
+                    if sub_mode in ('generic', 'atom'):
+                        if not target_with_h.HasSubstructMatch(sq):
+                            continue
+                    elif not mol.HasSubstructMatch(sq):
+                        continue
+                if mw is None:
+                    mw = str(round(Descriptors.ExactMolWt(mol), 2))
+                    mf = rdMolDescriptors.CalcMolFormula(mol)
+                name = mol.GetProp("_Name") if mol.HasProp("_Name") else 'N/A'
+                result_dict = {
+                    'smiles': smiles,
+                    'similarity': round(sim, 4),
+                    'id': name,
+                    'molecular_weight': mw,
+                    'molecular_formula': mf,
+                }
+                heap = query_heaps[qi]
+                entry = (sim, counter, result_dict)
+                counter += 1
+                if len(heap) < max_results:
+                    heapq.heappush(heap, entry)
+                elif sim > heap[0][0]:
+                    heapq.heapreplace(heap, entry)
+
+    click.echo(f"Searched {total:,} molecules in local database")
+
+    # Convert heaps to sorted result lists
+    query_summaries = [None] * n_queries
+    per_query_results = [None] * n_queries
+
+    for qi in range(n_queries):
+        results = [entry[2] for entry in sorted(query_heaps[qi], reverse=True)]
+        for r in results:
+            r['query_index'] = qi
+            r['query_smiles'] = query_smiles_list[qi]
+
+        click.echo(f"\n--- Query {qi + 1}/{n_queries}: {query_smiles_list[qi]} ---")
+        click.echo(f"  Found {len(results)} results")
+
+        query_summaries[qi] = {
+            'index': qi,
+            'smiles': query_smiles_list[qi],
+            'num_results': len(results)
+        }
+        per_query_results[qi] = results
+
+    return query_summaries, per_query_results
+
+
 @click.group()
 def cli():
     """ChemDB Search - Chemical database similarity search tool."""
@@ -90,6 +348,12 @@ def cli():
     type=str,
     default=settings.default_database,
     help='Enamine REAL database to search'
+)
+@click.option(
+    '--local-db', '-l',
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help='Search a local SDF/SMI file instead of the SmallWorld API'
 )
 @click.option(
     '--output-dir', '-o',
@@ -150,6 +414,7 @@ def search(
     threshold: float,
     max_results: int,
     database: str,
+    local_db: Optional[Path],
     output_dir: Path,
     output_format: str,
     fingerprint_type: str,
@@ -162,19 +427,25 @@ def search(
     verbose: bool
 ):
     """
-    Search Enamine REAL Space database for structurally similar molecules.
+    Search for structurally similar molecules by ECFP4 Tanimoto similarity.
 
     INPUT_FILE: Path to SDF, PDB, or SMI file containing one or more query molecules.
     Multi-molecule SDF and SMI files are supported for batch processing.
 
+    By default, searches the SmallWorld API (Enamine REAL Space).
+    Use --local-db/-l to search a local SDF/SMI file instead.
+
     Example:
         python search.py search aspirin.sdf -t 0.8 -n 50
-        python search.py search queries.smi -v
+        python search.py search aspirin.sdf -l database.smi -t 0.5
     """
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    click.echo(f"ChemDB Search - Enamine REAL Space Similarity Search")
+    if local_db:
+        click.echo(f"ChemDB Search - Local Similarity Search")
+    else:
+        click.echo(f"ChemDB Search - Enamine REAL Space Similarity Search")
     click.echo(f"{'='*60}")
 
     # 1. Read input molecules
@@ -204,97 +475,110 @@ def search(
             sys.exit(1)
         click.echo(f"Substructure filter molecule: {sub_smiles}")
 
-    # 2. Initialize API client
-    client = SmallWorldClient()
-
-    if not client.is_available():
-        click.echo("Warning: Cannot connect to SmallWorld API", err=True)
-        click.echo("Continuing anyway...", err=True)
-
-    click.echo(f"\nSearching database: {database}")
-    click.echo(f"Similarity threshold: {threshold}")
+    click.echo(f"\nSimilarity threshold: {threshold}")
     click.echo(f"Maximum results per query: {max_results}")
 
-    # 3. Search for each query molecule (parallel API calls)
-    all_results = []
-    query_summaries = [None] * len(queries)
-    per_query_results = [None] * len(queries)
+    if local_db:
+        # --- Local file search ---
+        query_summaries, per_query_results = _local_search(
+            local_db=local_db,
+            queries=queries,
+            threshold=threshold,
+            max_results=max_results,
+            sub_mol=sub_mol,
+            substructure_match=substructure_match,
+            atom_substructure_match=atom_substructure_match,
+            exact_substructure_match=exact_substructure_match,
+        )
+    else:
+        # --- SmallWorld API search ---
+        client = SmallWorldClient()
 
-    def _search_one(qi, smiles, retries=3, delay=5):
-        for attempt in range(retries):
-            try:
-                return qi, client.similarity_search(
-                    smiles=smiles,
-                    threshold=threshold,
-                    max_results=max_results,
-                    database=database
-                )
-            except Exception as e:
-                if attempt < retries - 1:
-                    logger.warning(f"Query {qi} failed (attempt {attempt + 1}/{retries}): {e}. Retrying in {delay}s...")
-                    time.sleep(delay)
-                else:
-                    logger.error(f"Query {qi} failed after {retries} attempts: {e}")
-                    raise
+        if not client.is_available():
+            click.echo("Warning: Cannot connect to SmallWorld API", err=True)
+            click.echo("Continuing anyway...", err=True)
 
-    workers = min(len(queries), 24)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_search_one, qi, smiles): (qi, mol, smiles)
-            for qi, (mol, smiles) in enumerate(queries)
-        }
-        for future in as_completed(futures):
-            qi, mol, smiles = futures[future]
-            try:
-                results = future.result()[1]
-            except Exception as e:
+        click.echo(f"Searching database: {database}")
+
+        query_summaries = [None] * len(queries)
+        per_query_results = [None] * len(queries)
+
+        def _search_one(qi, smiles, retries=3, delay=5):
+            for attempt in range(retries):
+                try:
+                    return qi, client.similarity_search(
+                        smiles=smiles,
+                        threshold=threshold,
+                        max_results=max_results,
+                        database=database
+                    )
+                except Exception as e:
+                    if attempt < retries - 1:
+                        logger.warning(f"Query {qi} failed (attempt {attempt + 1}/{retries}): {e}. Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"Query {qi} failed after {retries} attempts: {e}")
+                        raise
+
+        workers = min(len(queries), 24)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_search_one, qi, smiles): (qi, mol, smiles)
+                for qi, (mol, smiles) in enumerate(queries)
+            }
+            for future in as_completed(futures):
+                qi, mol, smiles = futures[future]
+                try:
+                    results = future.result()[1]
+                except Exception as e:
+                    click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
+                    click.echo(f"  Error: {e}", err=True)
+                    query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0, 'error': str(e)}
+                    per_query_results[qi] = []
+                    continue
+
                 click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
-                click.echo(f"  Error: {e}", err=True)
-                query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0, 'error': str(e)}
-                per_query_results[qi] = []
-                continue
 
-            click.echo(f"\n--- Query {qi + 1}/{len(queries)}: {smiles} ---")
+                if not results:
+                    click.echo(f"  No similar molecules found")
+                    query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0}
+                    per_query_results[qi] = []
+                    continue
 
-            if not results:
-                click.echo(f"  No similar molecules found")
-                query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': 0}
-                per_query_results[qi] = []
-                continue
+                # Filter by substructure match if requested
+                filter_mol = sub_mol if sub_mol is not None else mol
+                if exact_substructure_match:
+                    pre = len(results)
+                    results = [
+                        r for r in results
+                        if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
+                    ]
+                    click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
+                elif atom_substructure_match:
+                    pre = len(results)
+                    results = [
+                        r for r in results
+                        if FingerprintEngine.has_atom_substructure_match(filter_mol, r['smiles'])
+                    ]
+                    click.echo(f"  Atom-type substructure filter: {len(results)}/{pre}")
+                elif substructure_match:
+                    pre = len(results)
+                    results = [
+                        r for r in results
+                        if FingerprintEngine.has_generic_substructure_match(filter_mol, r['smiles'])
+                    ]
+                    click.echo(f"  Generic substructure filter: {len(results)}/{pre}")
 
-            # Filter by substructure match if requested
-            filter_mol = sub_mol if sub_mol is not None else mol
-            if exact_substructure_match:
-                pre = len(results)
-                results = [
-                    r for r in results
-                    if FingerprintEngine.has_exact_substructure_match(filter_mol, r['smiles'])
-                ]
-                click.echo(f"  Exact substructure filter: {len(results)}/{pre}")
-            elif atom_substructure_match:
-                pre = len(results)
-                results = [
-                    r for r in results
-                    if FingerprintEngine.has_atom_substructure_match(filter_mol, r['smiles'])
-                ]
-                click.echo(f"  Atom-type substructure filter: {len(results)}/{pre}")
-            elif substructure_match:
-                pre = len(results)
-                results = [
-                    r for r in results
-                    if FingerprintEngine.has_generic_substructure_match(filter_mol, r['smiles'])
-                ]
-                click.echo(f"  Generic substructure filter: {len(results)}/{pre}")
+                for r in results:
+                    r['query_index'] = qi
+                    r['query_smiles'] = smiles
 
-            for r in results:
-                r['query_index'] = qi
-                r['query_smiles'] = smiles
-
-            click.echo(f"  Found {len(results)} results")
-            query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': len(results)}
-            per_query_results[qi] = results
+                click.echo(f"  Found {len(results)} results")
+                query_summaries[qi] = {'index': qi, 'smiles': smiles, 'num_results': len(results)}
+                per_query_results[qi] = results
 
     # Combine results in query order and deduplicate by SMILES
+    all_results = []
     for results in per_query_results:
         if results:
             all_results.extend(results)
@@ -340,14 +624,19 @@ def search(
     if output_format in ['json', 'both']:
         json_path = output_dir / f"{base_name}.json"
 
+        search_params = {
+            'threshold': threshold,
+            'max_results': max_results,
+            'fingerprint_type': 'ECFP4 (Morgan radius=2, 2048 bits)' if local_db else fingerprint_type,
+        }
+        if local_db:
+            search_params['local_db'] = str(local_db)
+        else:
+            search_params['database'] = database
+
         json_output = {
             'queries': query_summaries,
-            'search_params': {
-                'threshold': threshold,
-                'max_results': max_results,
-                'database': database,
-                'fingerprint_type': fingerprint_type
-            },
+            'search_params': search_params,
             'input_file': str(input_file),
             'timestamp': timestamp,
             'num_queries': len(queries),

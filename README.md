@@ -8,7 +8,8 @@ Powered by the [SmallWorld API](https://sw.docking.org) — free access to billi
 
 - **Input formats**: `.sdf`, `.pdb`, and `.smi` files (all optionally gzip-compressed, e.g. `.sdf.gz`)
 - **Batch processing**: Multi-molecule SDF and SMI files — each molecule is searched independently
-- **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld)
+- **Similarity metric**: ECFP4 Tanimoto coefficient (via SmallWorld API or local computation)
+- **Local search**: Search any local SDF/SMI file with `--local-db/-l` — parallel processing for large files
 - **Optional substructure filtering**: Generic (`-sub`), atom-type (`-asub`), or exact (`-esub`), optionally from a separate file (`-sf`)
 - **Standalone filter command**: Apply substructure filters to any SDF file without running an API search
 - **Clustering**: MaxMin diversity picking with Tanimoto distance — scalable to 700k+ molecules
@@ -48,6 +49,12 @@ python search.py search molecules.sdf.gz -t 0.5
 # Substructure filter using a separate fragment file
 python search.py search aspirin.sdf -sub -sf fragment.sdf
 
+# Search a local SMILES file instead of the API
+python search.py search aspirin.sdf -l database.smi -t 0.5 -n 50
+
+# Search a local gzipped file with substructure filter
+python search.py search query.sdf -l molecules.smi.gz -t 0.3 -esub
+
 # Verbose mode for debugging
 python search.py search molecule.pdb -v
 ```
@@ -56,7 +63,7 @@ python search.py search molecule.pdb -v
 
 ### `search`
 
-Search Enamine REAL Space for structurally similar molecules.
+Search for structurally similar molecules by ECFP4 Tanimoto similarity. By default, searches the SmallWorld API (Enamine REAL Space). Use `--local-db/-l` to search a local SDF/SMI file instead.
 
 ```
 python search.py search INPUT_FILE [OPTIONS]
@@ -66,7 +73,8 @@ python search.py search INPUT_FILE [OPTIONS]
 |--------|-------|---------|-------------|
 | `--threshold` | `-t` | `0.7` | ECFP4 Tanimoto similarity threshold (0.0–1.0) |
 | `--max-results` | `-n` | `100` | Maximum number of results |
-| `--database` | `-d` | `REALDB-2025-07.smi.anon` | Database to search |
+| `--database` | `-d` | `REALDB-2025-07.smi.anon` | SmallWorld database to search (API mode) |
+| `--local-db` | `-l` | | Search a local SDF/SMI file instead of the SmallWorld API |
 | `--output-dir` | `-o` | `./results` | Output directory |
 | `--output-format` | | `both` | Output format: `sdf`, `json`, or `both` |
 | `--fingerprint-type` | | `morgan` | Fingerprint type (info only) |
@@ -284,7 +292,7 @@ ECFP4 Tanimoto scores depend heavily on molecule size:
 ## How It Works
 
 1. **Read** query molecule(s) from `.sdf`, `.pdb`, or `.smi` (optionally `.gz`-compressed), converting to isomeric SMILES (preserving stereochemistry from 3D coordinates)
-2. **Search** the SmallWorld API in parallel (up to 24 concurrent queries) for each query molecule
+2. **Search** the SmallWorld API in parallel (up to 24 concurrent queries) for each query molecule — or search a local file with `--local-db` using ECFP4 fingerprints across all CPU cores
 3. **Filter** results by Tanimoto threshold and optional substructure match (`-sub`/`-asub`/`-esub`)
 4. **Deduplicate** results by SMILES (keeping highest similarity per molecule)
 5. **Write** output SDF (with explicit H and MMFF-optimized 3D coordinates) and/or JSON
