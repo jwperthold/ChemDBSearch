@@ -11,6 +11,14 @@ import json
 logger = logging.getLogger(__name__)
 
 
+def _canonicalize_smiles(raw_smiles: str):
+    """Parse and canonicalize a SMILES string. Module-level for multiprocessing."""
+    mol = Chem.MolFromSmiles(raw_smiles)
+    if mol is None:
+        return None
+    return Chem.MolToSmiles(mol, isomericSmiles=True)
+
+
 class MoleculeReader:
     """Handles reading molecules from SDF, PDB, and SMI files."""
 
@@ -124,6 +132,41 @@ class MoleculeReader:
                     yield mol, smiles
         else:
             raise ValueError(f"Unsupported file format: {fmt}. Supported: .sdf, .pdb, .smi (optionally .gz)")
+
+    @staticmethod
+    def iter_smiles_parallel(file_path: Path, n_workers: int = 0,
+                             chunk_size: int = 10000) -> Iterator[str]:
+        """
+        Yield canonical SMILES from a file using multiprocessing for .smi files.
+
+        For .sdf/.pdb files or n_workers < 2, falls back to single-threaded
+        iter_molecules. For .smi files, distributes SMILES parsing across
+        CPU cores for ~N× speedup.
+        """
+        fmt, is_gz = MoleculeReader._resolve_format(file_path)
+
+        if fmt != '.smi' or n_workers < 2:
+            for _, smiles in MoleculeReader.iter_molecules(file_path):
+                yield smiles
+            return
+
+        from multiprocessing import Pool
+
+        opener = gzip.open if is_gz else open
+        with opener(file_path, 'rt') as f:
+            def _raw_smiles():
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    yield line.split(None, 1)[0]
+
+            with Pool(n_workers) as pool:
+                for smiles in pool.imap(
+                    _canonicalize_smiles, _raw_smiles(), chunksize=chunk_size
+                ):
+                    if smiles is not None:
+                        yield smiles
 
     @staticmethod
     def _read_sdf(file_path: Path, gz: bool = False) -> Tuple[Optional[Chem.Mol], str]:

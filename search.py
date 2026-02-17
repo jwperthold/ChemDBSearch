@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
+from rdkit import Chem
 from rdkit.Chem import Descriptors
 
 from config import settings
@@ -29,6 +30,39 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# --- Multiprocessing workers for parallel canonicalize + filter ---
+_worker_query = None
+_worker_mode = None
+
+
+def _init_filter_worker(sub_smiles, mode):
+    """Per-worker init: build query mol and adjust for filter mode."""
+    global _worker_query, _worker_mode
+    _worker_mode = mode
+    sub_mol = Chem.MolFromSmiles(sub_smiles)
+    if mode == 'generic':
+        _worker_query = FingerprintEngine.make_generic_query(sub_mol)
+    elif mode == 'atom':
+        _worker_query = FingerprintEngine.make_atom_query(sub_mol)
+    elif mode == 'exact':
+        _worker_query = Chem.RemoveHs(sub_mol)
+
+
+def _filter_one_smiles(raw_smiles):
+    """Worker: parse, canonicalize, and check substructure match in one call.
+    Returns (canonical_smiles, passed_filter) or None if invalid."""
+    mol = Chem.MolFromSmiles(raw_smiles)
+    if mol is None:
+        return None
+    canonical = Chem.MolToSmiles(mol, isomericSmiles=True)
+    if _worker_query is None:
+        return (canonical, True)
+    if _worker_mode in ('generic', 'atom'):
+        target = Chem.AddHs(mol)
+        return (canonical, target.HasSubstructMatch(_worker_query))
+    return (canonical, mol.HasSubstructMatch(_worker_query))
 
 
 @click.group()
@@ -439,23 +473,69 @@ def filter(
         filter_func = FingerprintEngine.has_generic_substructure_match
         filter_name = "Generic substructure"
 
-    # Stream molecules: deduplicate and filter in one pass (memory-efficient)
-    click.echo(f"Streaming molecules from: {results_file}")
+    # Stream molecules: canonicalize + filter in parallel, deduplicate in main
+    import os
+    n_workers = os.cpu_count() or 1
+    fmt, is_gz = MoleculeReader._resolve_format(results_file)
+
     seen = set()
     passed = []
     total = 0
     duplicates = 0
 
-    for _, smiles in MoleculeReader.iter_molecules(results_file):
-        total += 1
-        if total % 1_000_000 == 0:
-            click.echo(f"  processed {total:,} molecules ({len(passed):,} passed so far)...")
-        if smiles in seen:
-            duplicates += 1
-            continue
-        seen.add(smiles)
-        if filter_func(sub_mol, smiles):
-            passed.append({'smiles': smiles})
+    if fmt == '.smi' and n_workers >= 2:
+        # Parallel: each worker does MolFromSmiles + canonicalize + filter
+        import gzip
+        from multiprocessing import Pool
+
+        if exact_substructure_match:
+            mode = 'exact'
+        elif atom_substructure_match:
+            mode = 'atom'
+        else:
+            mode = 'generic'
+
+        click.echo(f"Streaming molecules from: {results_file} ({n_workers} workers)")
+        opener = gzip.open if is_gz else open
+        with opener(results_file, 'rt') as f:
+            def _raw_smiles():
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    yield line.split(None, 1)[0]
+
+            with Pool(n_workers, initializer=_init_filter_worker,
+                      initargs=(sub_smiles, mode)) as pool:
+                for result in pool.imap(_filter_one_smiles, _raw_smiles(),
+                                        chunksize=10000):
+                    if result is None:
+                        continue
+                    total += 1
+                    if total % 1_000_000 == 0:
+                        click.echo(f"  processed {total:,} molecules "
+                                   f"({len(passed):,} passed so far)...")
+                    canonical, matched = result
+                    if canonical in seen:
+                        duplicates += 1
+                        continue
+                    seen.add(canonical)
+                    if matched:
+                        passed.append({'smiles': canonical})
+    else:
+        # SDF/PDB or single-core: serial processing
+        click.echo(f"Streaming molecules from: {results_file}")
+        for _, smiles in MoleculeReader.iter_molecules(results_file):
+            total += 1
+            if total % 1_000_000 == 0:
+                click.echo(f"  processed {total:,} molecules "
+                           f"({len(passed):,} passed so far)...")
+            if smiles in seen:
+                duplicates += 1
+                continue
+            seen.add(smiles)
+            if filter_func(sub_mol, smiles):
+                passed.append({'smiles': smiles})
 
     if total == 0:
         click.echo("Error: No valid molecules found in results file", err=True)
@@ -626,26 +706,72 @@ def cluster(
             filter_func = FingerprintEngine.has_generic_substructure_match
             filter_name = "Generic substructure"
 
-    # Stream, deduplicate, and optionally filter molecules
-    click.echo(f"Loading molecules from: {input_file}")
+    # Phase 1: Parse SMILES, deduplicate, and optionally filter
+    import os
+    n_workers = os.cpu_count() or 1
+    fmt, is_gz = MoleculeReader._resolve_format(input_file)
+
     seen = set()
-    molecules = []
+    kept_smiles = []
     total = 0
     duplicates = 0
 
-    for mol, smiles in MoleculeReader.iter_molecules(input_file):
-        total += 1
-        if total % 1_000_000 == 0:
-            click.echo(f"  processed {total:,} molecules ({len(molecules):,} kept so far)...")
-        if smiles in seen:
-            duplicates += 1
-            continue
-        seen.add(smiles)
-        if use_filter and not filter_func(sub_mol, smiles):
-            continue
-        molecules.append((mol, smiles))
+    if fmt == '.smi' and n_workers >= 2 and use_filter:
+        # Parallel: each worker does MolFromSmiles + canonicalize + filter
+        import gzip
+        from multiprocessing import Pool
 
-    if not molecules:
+        if exact_substructure_match:
+            mode = 'exact'
+        elif atom_substructure_match:
+            mode = 'atom'
+        else:
+            mode = 'generic'
+
+        click.echo(f"Loading molecules from: {input_file} ({n_workers} workers)")
+        opener = gzip.open if is_gz else open
+        with opener(input_file, 'rt') as f:
+            def _raw_smiles():
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    yield line.split(None, 1)[0]
+
+            with Pool(n_workers, initializer=_init_filter_worker,
+                      initargs=(sub_smiles, mode)) as pool:
+                for result in pool.imap(_filter_one_smiles, _raw_smiles(),
+                                        chunksize=10000):
+                    if result is None:
+                        continue
+                    total += 1
+                    if total % 1_000_000 == 0:
+                        click.echo(f"  processed {total:,} molecules "
+                                   f"({len(kept_smiles):,} kept so far)...")
+                    canonical, matched = result
+                    if canonical in seen:
+                        duplicates += 1
+                        continue
+                    seen.add(canonical)
+                    if matched:
+                        kept_smiles.append(canonical)
+    else:
+        # SDF/PDB, single-core, or no filter: parallel canonicalize only
+        click.echo(f"Loading molecules from: {input_file} ({n_workers} workers)")
+        for smiles in MoleculeReader.iter_smiles_parallel(input_file, n_workers=n_workers):
+            total += 1
+            if total % 1_000_000 == 0:
+                click.echo(f"  processed {total:,} molecules "
+                           f"({len(kept_smiles):,} kept so far)...")
+            if smiles in seen:
+                duplicates += 1
+                continue
+            seen.add(smiles)
+            if use_filter and not filter_func(sub_mol, smiles):
+                continue
+            kept_smiles.append(smiles)
+
+    if not kept_smiles:
         click.echo("Error: No valid molecules found (after filtering)", err=True)
         sys.exit(1)
 
@@ -654,7 +780,15 @@ def cluster(
     if duplicates:
         click.echo(f"  ({duplicates:,} duplicates removed)")
     if use_filter:
-        click.echo(f"  {filter_name} filter: {len(molecules):,}/{unique:,} passed")
+        click.echo(f"  {filter_name} filter: {len(kept_smiles):,}/{unique:,} passed")
+
+    # Phase 2: Create mol objects for kept molecules only
+    click.echo(f"Building molecule objects for {len(kept_smiles):,} molecules...")
+    molecules = []
+    for smiles in kept_smiles:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is not None:
+            molecules.append((mol, smiles))
 
     n_mols = len(molecules)
     if n_clusters >= n_mols:
